@@ -53,6 +53,8 @@ type CDBM struct {
 	RootFlags         RootFlagsConfig                      `yaml:"root_flags" mapstructure:"root_flags"`
 	DropFlags         DropFlagsConfig                      `yaml:"drop_flags" mapstructure:"drop_flags"`
 	DatabaseConfig    map[string][]webutil.DatabaseSetting `yaml:"database_config" mapstructure:"database_config"`
+
+	migrateCfg migrateConfig
 }
 
 type DBProtocolConfig struct {
@@ -63,18 +65,22 @@ type DBProtocolConfig struct {
 	DriverConfig         interface{}
 }
 
+type FlagName struct {
+	LongHand  string
+	ShortHand string
+}
+
 type schemaMigration struct {
 	StartingVersion   int
 	Dirty             bool
 	DirtyState        *string
 	IsCustomMigration bool
-
-	NoRows bool
+	SchemaCfg         schemaConfig
 }
 
-type FlagName struct {
-	LongHand  string
-	ShortHand string
+type schemaConfig struct {
+	NoRows   bool
+	HasEntry bool
 }
 
 // NewCDBM intiates a new *CDBM instance
@@ -233,7 +239,7 @@ func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 	return cdbm, nil
 }
 
-func (cdbm *CDBM) querySchemaMigration() (schemaMigration, error) {
+func (cdbm *CDBM) querySchemaMigration() error {
 	var err error
 	var sm schemaMigration
 
@@ -245,7 +251,7 @@ func (cdbm *CDBM) querySchemaMigration() (schemaMigration, error) {
 	// Else query for lastest version
 	if err = cdbm.DBProtocolCfg.MigrationTableSearch(cdbm.DB); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
-			return schemaMigration{}, errors.WithStack(err)
+			return errors.WithStack(err)
 		}
 
 		if _, err = cdbm.DB.Exec(
@@ -258,10 +264,10 @@ func (cdbm *CDBM) querySchemaMigration() (schemaMigration, error) {
 			);
 			`,
 		); err != nil {
-			return schemaMigration{}, errors.WithStack(err)
+			return errors.WithStack(err)
 		}
 
-		sm.NoRows = true
+		sm.SchemaCfg.NoRows = true
 	} else {
 		if err = cdbm.DB.QueryRowx(
 			`
@@ -275,12 +281,13 @@ func (cdbm *CDBM) querySchemaMigration() (schemaMigration, error) {
 			`,
 		).Scan(&sm.StartingVersion, &sm.Dirty, &sm.DirtyState, &sm.IsCustomMigration); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
-				return schemaMigration{}, errors.WithStack(err)
+				return errors.WithStack(err)
 			}
 
-			sm.NoRows = true
+			sm.SchemaCfg.NoRows = true
 		}
 	}
 
-	return sm, nil
+	cdbm.migrateCfg.SchemaMigration = sm
+	return nil
 }

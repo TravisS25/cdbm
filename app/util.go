@@ -3,18 +3,35 @@ package app
 import (
 	"database/sql"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/TravisS25/webutil/webutil"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 )
+
+type FileOverride struct {
+	*file.File
+}
+
+func (fo *FileOverride) ReadUp(version uint) (r io.ReadCloser, identifier string, err error) {
+	stringReader := strings.NewReader("shiny!")
+	stringReadCloser := ioutil.NopCloser(stringReader)
+	return stringReadCloser, "", nil
+}
+
+func init() {
+	//source.Register("")
+}
 
 func DefaultExecCmd(c *exec.Cmd) error {
 	return c.Run()
@@ -36,22 +53,7 @@ func DefaultGetMigrationFunc(migDir string, db *sql.DB, protocolCfg DBProtocolCo
 	return mig, nil
 }
 
-func DefaultFileMigrationFunc(mig *migrate.Migrate, version int, mt MigrationType) error {
-	// v := uint(version)
-
-	// switch mt {
-	// case MigrateTypeUp:
-	// 	v++
-	// 	return mig.Migrate(v)
-	// case MigrateTypeDown:
-	// 	v--
-	// 	return mig.Migrate(v)
-	// case MigrateTypeForce:
-	// 	return mig.Force(version)
-	// default:
-	// 	return fmt.Errorf("invalid migration type")
-	// }
-
+func DefaultFileMigrationFunc(mig *migrate.Migrate, version int, mt MigrationsType) error {
 	switch mt {
 	case MigrateTypeUp:
 		return mig.Steps(1)

@@ -2,12 +2,25 @@ package app
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/TravisS25/cdbm/cdbmutil"
 	"github.com/TravisS25/webutil/webutil"
 )
+
+func TestFoo(t *testing.T) {
+	stringReader := strings.NewReader("shiny!")
+	stringReadCloser := ioutil.NopCloser(stringReader)
+
+	err := stringReadCloser.Close()
+
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+}
 
 func TestAppendValuesQuery(t *testing.T) {
 	var err error

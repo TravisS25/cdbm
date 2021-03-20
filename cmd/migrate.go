@@ -23,10 +23,11 @@ import (
 )
 
 type migrateNameConfig struct {
-	ResetDirtyFlag    flagName
-	TargetVersion     flagName
-	RollbackOnFailure flagName
-	MigrationsDir     flagName
+	ResetDirtyFlag     flagName
+	TargetVersion      flagName
+	RollbackOnFailure  flagName
+	MigrationsDir      flagName
+	MigrationsProtocol flagName
 }
 
 var migrateNameCfg = migrateNameConfig{
@@ -45,6 +46,10 @@ var migrateNameCfg = migrateNameConfig{
 	ResetDirtyFlag: flagName{
 		LongHand:  "reset-dirty-flag",
 		ShortHand: "r",
+	},
+	MigrationsProtocol: flagName{
+		LongHand:  "migrations-protocol",
+		ShortHand: "p",
 	},
 }
 
@@ -65,6 +70,7 @@ var migrateCmd = &cobra.Command{
 		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsDir.LongHand)
 		rollbackOnFailure, _ := cmd.Flags().GetBool(migrateNameCfg.MigrationsDir.LongHand)
 		resetDirtyFlag, _ := cmd.Flags().GetBool(migrateNameCfg.ResetDirtyFlag.LongHand)
+		migrationsProtocol, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsProtocol.LongHand)
 
 		if targetVersion != -1 {
 			globalApp.MigrateFlags.TargetVersion = targetVersion
@@ -77,6 +83,11 @@ var migrateCmd = &cobra.Command{
 		}
 		if resetDirtyFlag {
 			globalApp.MigrateFlags.ResetDirtyFlag = resetDirtyFlag
+		}
+		if migrationsProtocol != "" {
+			globalApp.MigrateFlags.MigrationsProtocol = app.MigrationsProtocol(migrationsProtocol)
+		} else if globalApp.MigrateFlags.MigrationsProtocol == "" {
+			globalApp.MigrateFlags.MigrationsProtocol = app.FileProtocol
 		}
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -107,6 +118,12 @@ func init() {
 		"",
 		"Directory where migration files are located",
 	)
+	migrateCmd.Flags().StringP(
+		migrateNameCfg.MigrationsProtocol.LongHand,
+		migrateNameCfg.MigrationsProtocol.ShortHand,
+		"",
+		"Protocol used for connecting to migrations directory",
+	)
 	migrateCmd.Flags().BoolP(
 		migrateNameCfg.RollbackOnFailure.LongHand,
 		migrateNameCfg.RollbackOnFailure.ShortHand,
@@ -119,4 +136,5 @@ func init() {
 		false,
 		"When set will reset dirty flag when migrating",
 	)
+
 }
