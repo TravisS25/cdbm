@@ -4,27 +4,10 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/spf13/cobra"
 )
 
 type DropFlagsConfig struct {
 	Confirm bool `yaml:"confirm" mapstructure:"confirm"`
-}
-
-type DropNameConfig struct {
-	Confirm FlagName
-}
-
-var DefaultDropNameCfg = DropNameConfig{
-	Confirm: FlagName{
-		LongHand:  "confirm",
-		ShortHand: "c",
-	},
-}
-
-func ApplyDropFlagsConfig(cmd *cobra.Command, dnCfg DropNameConfig, dfCfg *DropFlagsConfig) {
-	confirm, _ := cmd.Flags().GetBool(dnCfg.Confirm.LongHand)
-	dfCfg.Confirm = confirm
 }
 
 func (cdbm *CDBM) Drop() error {

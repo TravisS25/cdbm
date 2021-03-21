@@ -162,4 +162,6 @@ func initConfig() {
 		fmt.Fprintf(os.Stderr, err.Error())
 		os.Exit(1)
 	}
+
+	//fmt.Printf("%+v", globalApp.MigrateFlags)
 }

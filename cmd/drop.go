@@ -16,9 +16,19 @@ limitations under the License.
 package cmd
 
 import (
-	"github.com/TravisS25/cdbm/app"
 	"github.com/spf13/cobra"
 )
+
+type dropNameConfig struct {
+	Confirm flagName
+}
+
+var dropNameCfg = dropNameConfig{
+	Confirm: flagName{
+		LongHand:  "confirm",
+		ShortHand: "c",
+	},
+}
 
 // dropCmd represents the drop command
 var dropCmd = &cobra.Command{
@@ -26,7 +36,8 @@ var dropCmd = &cobra.Command{
 	Short: "Drops all tables in database",
 	Long:  `Drops all tables in database.  This should only be used for testing purposes only`,
 	PreRun: func(cmd *cobra.Command, args []string) {
-		app.ApplyDropFlagsConfig(cmd, app.DefaultDropNameCfg, &globalApp.DropFlags)
+		confirm, _ := cmd.Flags().GetBool(dropNameCfg.Confirm.LongHand)
+		globalApp.DropFlags.Confirm = confirm
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		//fmt.Println("drop called")
@@ -38,8 +49,8 @@ func init() {
 	rootCmd.AddCommand(dropCmd)
 
 	dropCmd.Flags().BoolP(
-		app.DefaultDropNameCfg.Confirm.LongHand,
-		app.DefaultDropNameCfg.Confirm.ShortHand,
+		dropNameCfg.Confirm.LongHand,
+		dropNameCfg.Confirm.ShortHand,
 		false,
 		"Skips drop confirmation and drops all tables in database",
 	)

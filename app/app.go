@@ -51,6 +51,7 @@ type CDBM struct {
 	MigrateFlags      MigrateFlagsConfig                   `yaml:"migrate_flags" mapstructure:"migrate_flags"`
 	RootFlags         RootFlagsConfig                      `yaml:"root_flags" mapstructure:"root_flags"`
 	DropFlags         DropFlagsConfig                      `yaml:"drop_flags" mapstructure:"drop_flags"`
+	LogFlags          LogFlagsConfig                       `yaml:"log_flags" mapstructure:"log_flags"`
 	DatabaseConfig    map[string][]webutil.DatabaseSetting `yaml:"database_config" mapstructure:"database_config"`
 
 	migrateCfg migrateConfig
