@@ -3,7 +3,9 @@ package app
 import "fmt"
 
 func (cdbm *CDBM) Status() error {
-	err := cdbm.querySchemaMigration()
+	var err error
+
+	cdbm.migrateCfg.SchemaMigration, err = cdbm.getSchemaMigration()
 
 	if err != nil {
 		return err

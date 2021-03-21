@@ -1,7 +1,6 @@
 package app
 
 import (
-	"database/sql"
 	"fmt"
 
 	"github.com/TravisS25/webutil/webutil"
@@ -81,6 +80,7 @@ type schemaMigration struct {
 type schemaConfig struct {
 	NoRows   bool
 	HasEntry bool
+	Dirty    bool
 }
 
 // NewCDBM intiates a new *CDBM instance
@@ -237,57 +237,4 @@ func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 	}
 
 	return cdbm, nil
-}
-
-func (cdbm *CDBM) querySchemaMigration() error {
-	var err error
-	var sm schemaMigration
-
-	// MigrationTableSearch should be custom query depending on database
-	// on whether the "schema_migrations" table exists
-	//
-	// If it doesn't exist, then we assume we are starting at version 1
-	//
-	// Else query for lastest version
-	if err = cdbm.DBProtocolCfg.MigrationTableSearch(cdbm.DB); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return errors.WithStack(err)
-		}
-
-		if _, err = cdbm.DB.Exec(
-			`
-			CREATE TABLE public.schema_migrations (
-				version INT8 NOT NULL primary key,
-				dirty boolean not null,
-				dirty_state text,
-				is_custom_migration boolean not null default false
-			);
-			`,
-		); err != nil {
-			return errors.WithStack(err)
-		}
-
-		sm.SchemaCfg.NoRows = true
-	} else {
-		if err = cdbm.DB.QueryRowx(
-			`
-			select
-				schema_migrations.version,
-				schema_migrations.dirty,
-				schema_migrations.dirty_state,
-				schema_migrations.is_custom_migration
-			from
-				schema_migrations
-			`,
-		).Scan(&sm.StartingVersion, &sm.Dirty, &sm.DirtyState, &sm.IsCustomMigration); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return errors.WithStack(err)
-			}
-
-			sm.SchemaCfg.NoRows = true
-		}
-	}
-
-	cdbm.migrateCfg.SchemaMigration = sm
-	return nil
 }

@@ -65,8 +65,6 @@ var postgresMigrationTableSearch = func(db webutil.DBInterface) error {
 		`,
 	).Scan(&filler)
 
-	fmt.Printf("filler: %s\n", filler)
-
 	if err != nil {
 		fmt.Printf("err: %s\n", err.Error())
 	}
@@ -85,6 +83,7 @@ type MigrateFlagsConfig struct {
 	ResetDirtyFlag     bool               `yaml:"reset_dirty_flag" mapstructure:"reset_dirty_flag"`
 	MigrationsProtocol MigrationsProtocol `yaml:"migrations_protocol" mapstructure:"migrations_protocol"`
 	MigrationsDir      string             `yaml:"migrations_dir" mapstructure:"migrations_dir"`
+	Logs               string             `yaml:"migrations_dir" mapstructure:"migrations_dir"`
 }
 
 type MigrationsType string
@@ -144,7 +143,7 @@ func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFun
 	}
 
 	// Query current migration status and set to CDBM#migrateCfg#SchemaMigration
-	if err = cdbm.querySchemaMigration(); err != nil {
+	if cdbm.migrateCfg.SchemaMigration, err = cdbm.getSchemaMigration(); err != nil {
 		return err
 	}
 
@@ -184,7 +183,7 @@ func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFun
 	// If startingVersion != cdbm.migrateCfg.TargetVersion than we know user wants to migrate up or down
 	// or if schemaMigrations#NoRows is true than we know no migrations have been applied yet
 	if cdbm.migrateCfg.SchemaMigration.StartingVersion != cdbm.migrateCfg.TargetVersion ||
-		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows || cdbm.migrateCfg.SchemaMigration.IsCustomMigration {
+		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows || cdbm.migrateCfg.SchemaMigration.Dirty {
 		cdbm.migrateCfg.MigrateType = MigrateTypeUp
 
 		if cdbm.migrateCfg.SchemaMigration.StartingVersion > cdbm.migrateCfg.TargetVersion {
@@ -337,8 +336,9 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		}
 
 		_, ok := fileVersions[version]
+		_, customOK := cdbm.migrateCfg.CustomMigrations[version]
 
-		if !ok {
+		if !ok && !customOK {
 			migrationApplyCfgs = append(
 				migrationApplyCfgs,
 				migrationApplyConfig{
@@ -350,13 +350,13 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		fileVersions[version] = true
 	}
 
-	dupVersionSlice := make([]int, 0)
+	invalidCustomVersions := make([]int, 0)
 
 	// Loop through custom migrations to make sure there are no duplicate
 	// versions between files and custom migrations
 	for k, v := range cdbm.migrateCfg.CustomMigrations {
-		if _, ok := fileVersions[k]; ok {
-			dupVersionSlice = append(dupVersionSlice, k)
+		if _, ok := fileVersions[k]; !ok {
+			invalidCustomVersions = append(invalidCustomVersions, k)
 		}
 
 		mac := migrationApplyConfig{
@@ -371,16 +371,69 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		return nil, fmt.Errorf("no sql files or custom migrations found")
 	}
 
-	if len(dupVersionSlice) > 0 {
+	if len(invalidCustomVersions) > 0 {
 		return nil, errors.WithStack(
 			fmt.Errorf(
-				"following versions are duplicated between files and custom migrations: %v",
-				dupVersionSlice,
+				"following custom versions are out of range from files: %v",
+				invalidCustomVersions,
 			),
 		)
 	}
 
 	return migrationApplyCfgs, nil
+}
+
+func (cdbm *CDBM) getSchemaMigration() (schemaMigration, error) {
+	var err error
+	var sm schemaMigration
+
+	// MigrationTableSearch should be custom query depending on database
+	// on whether the "schema_migrations" table exists
+	//
+	// If it doesn't exist, then we assume we are starting at version 1
+	//
+	// Else query for lastest version
+	if err = cdbm.DBProtocolCfg.MigrationTableSearch(cdbm.DB); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return schemaMigration{}, errors.WithStack(err)
+		}
+
+		if _, err = cdbm.DB.Exec(
+			`
+			CREATE TABLE public.schema_migrations (
+				version INT8 NOT NULL primary key,
+				dirty boolean not null,
+				dirty_state text,
+				is_custom_migration boolean not null default false
+			);
+			`,
+		); err != nil {
+			return schemaMigration{}, errors.WithStack(err)
+		}
+
+		sm.SchemaCfg.NoRows = true
+	} else {
+		if err = cdbm.DB.QueryRowx(
+			`
+			select
+				schema_migrations.version,
+				schema_migrations.dirty,
+				schema_migrations.dirty_state,
+				schema_migrations.is_custom_migration
+			from
+				schema_migrations
+			`,
+		).Scan(&sm.StartingVersion, &sm.Dirty, &sm.DirtyState, &sm.IsCustomMigration); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return schemaMigration{}, errors.WithStack(err)
+			}
+
+			sm.SchemaCfg.NoRows = true
+		}
+	}
+
+	//cdbm.migrateCfg.SchemaMigration = sm
+	return sm, nil
 }
 
 func (cdbm *CDBM) applyTargetVersion(cfgs []migrationApplyConfig) error {
@@ -400,6 +453,7 @@ func (cdbm *CDBM) resetDirtyFlag() error {
 	var err error
 
 	if cdbm.migrateCfg.SchemaMigration.Dirty {
+		cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty = true
 		if cdbm.MigrateFlags.ResetDirtyFlag {
 			if _, err = cdbm.DB.Exec(
 				cdbm.migrateCfg.UpdateQuery,
@@ -495,6 +549,8 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) error {
 	var err, innerErr error
 
+	fmt.Printf("custom version: %d\n", version)
+
 	if err = cmFunc(cdbm.DB); err != nil {
 		cdbm.migrateCfg.LogWriter(err)
 
@@ -529,7 +585,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 				false,
 				"",
 				cdbm.migrateCfg.SchemaMigration.IsCustomMigration,
-			); err != nil {
+			); innerErr != nil {
 				cdbm.migrateCfg.LogWriter(innerErr)
 			}
 
@@ -544,7 +600,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 				true,
 				cdbm.migrateCfg.MigrateType,
 				true,
-			); err != nil {
+			); innerErr != nil {
 				cdbm.migrateCfg.LogWriter(innerErr)
 			}
 		}
@@ -552,8 +608,14 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 		return err
 	}
 
+	isCustom := true
+
 	if cdbm.migrateCfg.MigrateType == MigrateTypeDown {
 		version--
+
+		if _, ok := cdbm.migrateCfg.CustomMigrations[version]; !ok {
+			isCustom = false
+		}
 	}
 
 	if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
@@ -562,7 +624,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 			version,
 			false,
 			"",
-			true,
+			isCustom,
 		); err != nil {
 			cdbm.migrateCfg.LogWriter(err)
 			return errors.WithStack(err)
@@ -575,7 +637,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 			version,
 			false,
 			"",
-			true,
+			isCustom,
 		); err != nil {
 			cdbm.migrateCfg.LogWriter(err)
 			return errors.WithStack(err)
@@ -587,6 +649,20 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 
 func (cdbm *CDBM) applyFileMigration(version int) error {
 	var err, innerErr error
+
+	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty &&
+		cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+		if err = cdbm.migrateCfg.FileMigration(
+			cdbm.migrateCfg.Migrate,
+			version,
+			MigrateTypeDown,
+		); err != nil {
+			// Think about proper way to handle this later!!!!
+			return errors.WithStack(err)
+		}
+
+		cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty = false
+	}
 
 	if err = cdbm.migrateCfg.FileMigration(
 		cdbm.migrateCfg.Migrate,
@@ -618,8 +694,14 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 
 		return err
 	} else {
+		isCustom := false
+
 		if cdbm.migrateCfg.MigrateType == MigrateTypeDown {
 			version--
+
+			if _, ok := cdbm.migrateCfg.CustomMigrations[version]; ok {
+				isCustom = true
+			}
 		}
 
 		if _, err = cdbm.DB.Exec(
@@ -627,10 +709,22 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 			version,
 			false,
 			"",
-			false,
+			isCustom,
 		); err != nil {
 			cdbm.migrateCfg.LogWriter(err)
 			return errors.WithStack(err)
+		}
+	}
+
+	if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
+		sm, err := cdbm.getSchemaMigration()
+
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if !sm.SchemaCfg.NoRows {
+			cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry = true
 		}
 	}
 
@@ -638,6 +732,8 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 }
 
 func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
+	fmt.Printf("apply migration version: %d\n", cfg.Version)
+
 	var cm CustomMigrationFunc
 	var err error
 
@@ -673,16 +769,9 @@ func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 
 	if cdbm.migrateCfg.MigrateType == MigrateTypeUp {
 		for _, v := range cfgs {
-
-			if cdbm.migrateCfg.SchemaMigration.IsCustomMigration {
-				if cdbm.migrateCfg.SchemaMigration.Dirty {
-					if v.Version < cdbm.migrateCfg.SchemaMigration.StartingVersion {
-						continue
-					}
-				} else {
-					if v.Version <= cdbm.migrateCfg.SchemaMigration.StartingVersion {
-						continue
-					}
+			if cdbm.migrateCfg.SchemaMigration.Dirty {
+				if v.Version < cdbm.migrateCfg.SchemaMigration.StartingVersion {
+					continue
 				}
 			} else {
 				if v.Version <= cdbm.migrateCfg.SchemaMigration.StartingVersion {
@@ -700,20 +789,12 @@ func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 		}
 	} else {
 		for i := len(cfgs) - 1; i >= 0; i-- {
-			//fmt.Printf("starting version: %d\n", cdbm.migrateCfg.SchemaMigration.StartingVersion)
-
 			if cfgs[i].Version > cdbm.migrateCfg.SchemaMigration.StartingVersion {
 				continue
 			}
 
-			if cdbm.migrateCfg.SchemaMigration.IsCustomMigration {
-				if cdbm.migrateCfg.TargetVersion >= cfgs[i].Version {
-					break
-				}
-			} else {
-				if cdbm.migrateCfg.TargetVersion > cfgs[i].Version {
-					break
-				}
+			if cdbm.migrateCfg.TargetVersion >= cfgs[i].Version {
+				break
 			}
 
 			if err = cdbm.applyMigrationConfig(cfgs[i]); err != nil {

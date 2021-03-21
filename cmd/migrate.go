@@ -65,7 +65,7 @@ var migrateCmd = &cobra.Command{
 	through results to manipulate in some fashion and is either much easier to do in code or 
 	impossible to do in sql migrations
 	`,
-	PreRun: func(cmd *cobra.Command, args []string) {
+	PreRunE: func(cmd *cobra.Command, args []string) error {
 		targetVersion, _ := cmd.Flags().GetInt(migrateNameCfg.TargetVersion.LongHand)
 		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsDir.LongHand)
 		rollbackOnFailure, _ := cmd.Flags().GetBool(migrateNameCfg.MigrationsDir.LongHand)
@@ -89,6 +89,12 @@ var migrateCmd = &cobra.Command{
 		} else if globalApp.MigrateFlags.MigrationsProtocol == "" {
 			globalApp.MigrateFlags.MigrationsProtocol = app.FileProtocol
 		}
+
+		if globalApp.MigrateFlags.MigrationsDir == "" {
+			return fmt.Errorf("--migration-dir is required")
+		}
+
+		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("migrate called")
