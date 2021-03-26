@@ -86,8 +86,8 @@ type schemaConfig struct {
 
 // NewCDBM intiates a new *CDBM instance
 //
-// RootFlagsConfig#DBProtocol is a required field as it is used
-// to help intiate a db connection
+// RootFlagsConfig#DBProtocol is a required if not read from file
+// as it intiates what type of database we are working with
 func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 	cdbm, err := GetCDBMConfig(cfg.EnvVar)
 
