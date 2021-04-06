@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	ErrInvalidFileName = fmt.Errorf("invalid sql file name;  proper naming:<version>_<description>.<'up'|'down'>.sql")
+	ErrInvalidFileName = fmt.Errorf("cdbm: invalid sql file name - proper naming:<version>_<description>.<'up'|'down'>.sql")
 
 	migrationsProtocolList = []MigrationsProtocol{
 		FileProtocol,
@@ -48,11 +48,13 @@ var (
 	}
 )
 
+// postgresMigrationTableSearch is default search function for postgres to
+// determine if schema_migrations table exists in database table
 var postgresMigrationTableSearch = func(db webutil.DBInterface) error {
 	var filler string
 	var err error
 
-	err = db.QueryRowx(
+	if err = db.QueryRowx(
 		`
 		select 
 			table_name 
@@ -63,56 +65,117 @@ var postgresMigrationTableSearch = func(db webutil.DBInterface) error {
 		and    
 			table_name = 'schema_migrations' 
 		`,
-	).Scan(&filler)
-
-	if err != nil {
-		fmt.Printf("err: %s\n", err.Error())
+	).Scan(&filler); err != nil {
+		return err
 	}
 
-	return err
+	return nil
 }
 
+// CustomMigration is config struct used to migrate database with
+// custom go code
 type CustomMigration struct {
-	Up   CustomMigrationFunc
+	// Up should migrate database to next state
+	Up CustomMigrationFunc
+
+	// Down should migrate database to previous state
 	Down CustomMigrationFunc
 }
 
+// MigrateFlagsConfig is flag config struct for migrate command set by command line
+// or set in code if used a library
 type MigrateFlagsConfig struct {
-	TargetVersion      int                `yaml:"target_version" mapstructure:"target_version"`
-	RollbackOnFailure  bool               `yaml:"rollback_on_failure" mapstructure:"rollback_on_failure"`
-	ResetDirtyFlag     bool               `yaml:"reset_dirty_flag" mapstructure:"reset_dirty_flag"`
+	// TargetVersion should be the version you wish to set the database at
+	// If set below 0 than the latest version is used by default
+	TargetVersion int `yaml:"target_version" mapstructure:"target_version"`
+
+	// RollbackOnFailure gives user ability to rollback a migration to starting state
+	// if it fails on migration when set
+	//
+	// This only works when migrating up
+	RollbackOnFailure bool `yaml:"rollback_on_failure" mapstructure:"rollback_on_failure"`
+
+	// ResetDirtyFlag must be set if migration is in a dirty state to reset dirty state
+	// or error will be returned without running anything
+	//
+	// This is used as a "saftey switch" to remind user that database is in dirty state
+	ResetDirtyFlag bool `yaml:"reset_dirty_flag" mapstructure:"reset_dirty_flag"`
+
+	// SkipFileMigrationResetOnFailure is used to skip a migration reset for file migration if it fails
+	//
+	// A migration reset occurs when:
+	// 	1) Starting migration version has dirty flag
+	//	2) Starting migration version is file migration ie. NOT custom migration
+	// 	3) Currently trying to migrate up
+	//
+	// Resetting a file migration is when we first call the down migration of current version
+	// to try to undo previous bad up migration
+	// If this fails, we will receive error and return unless SkipFileMigrationResetOnFailure
+	// is set in which case we disregard the error and continue with the current up migration
+	SkipFileMigrationResetOnFailure bool `yaml:"skip_migration_reset_on_failure" mapstructure:"skip_migration_reset_on_failure"`
+
+	// MigrationsProtocol is protocol used to retrieve migration files
 	MigrationsProtocol MigrationsProtocol `yaml:"migrations_protocol" mapstructure:"migrations_protocol"`
-	MigrationsDir      string             `yaml:"migrations_dir" mapstructure:"migrations_dir"`
-	Logs               string             `yaml:"migrations_dir" mapstructure:"migrations_dir"`
+
+	// MigrationsDir is directory where migration files are stored whether locally or remotely
+	MigrationsDir string `yaml:"migrations_dir" mapstructure:"migrations_dir"`
 }
 
+// MigrationsType is enum for different migration type ie. "Up", "Down", "Force"
 type MigrationsType string
 
+// MigrationsProtocol is enum for different database protocols
 type MigrationsProtocol string
 
+// FileMigrationFunc should implement migrating database up or down
 type FileMigrationFunc func(mig *migrate.Migrate, version int, mt MigrationsType) error
 
+// CustomMigrationFunc should implement migrating database up or down through custom code
 type CustomMigrationFunc func(db webutil.DBInterface) error
 
+// GetMigrationFunc should implement getting migrate.Migrate based on migrations
+// directory and database instance
 type GetMigrationFunc func(migDir string, db *sql.DB, protocolCfg DBProtocolConfig) (*migrate.Migrate, error)
 
+// migrationApplyConfig is config struct to apply migrations and version
 type migrationApplyConfig struct {
-	Version         int
+	// Version is current version to apply to database
+	Version int
+
+	// CustomMigration is custom migrations to apply if set
 	CustomMigration CustomMigration
 }
 
 type migrateConfig struct {
-	LogWriter        func(error)
-	InsertQuery      string
-	UpdateQuery      string
-	TargetVersion    int
-	MigrateType      MigrationsType
-	FileMigration    FileMigrationFunc
+	// LogWriter will write migrate errors to file system
+	LogWriter func(error)
+
+	// InsertQuery is query to insert info into schema_migrations table
+	InsertQuery string
+
+	// UpdateQuery is query to update info in schema_migrations table
+	UpdateQuery string
+
+	// TargetVersion is version passed by --target-version flag
+	TargetVersion int
+
+	// MigrateType determines if we are migrating "Up" "Down" "Force"
+	MigrateType MigrationsType
+
+	// FileMigration runs migration against database
+	FileMigration FileMigrationFunc
+
+	// CustomMigrations is map of custom migrations
 	CustomMigrations map[int]CustomMigration
-	SchemaMigration  schemaMigration
-	Migrate          *migrate.Migrate
+
+	// SchemaMigration represents schema_migrations table
+	SchemaMigration schemaMigration
+
+	// Migrate is migrate.Migrate instance to migrate database
+	Migrate *migrate.Migrate
 }
 
+// Migrate migrates database based on given settings
 func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFunc, cMigrations map[int]CustomMigration) error {
 	var err error
 
@@ -161,11 +224,6 @@ func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFun
 		return errors.WithStack(err)
 	}
 
-	// Sort migrationApplyCfgs by version so migrations can happen in order
-	sort.SliceStable(migrationApplyCfgs, func(i, j int) bool {
-		return migrationApplyCfgs[i].Version < migrationApplyCfgs[j].Version
-	})
-
 	// If user is targeting specific version, make sure it exists
 	// Else choose the highest version
 	if err = cdbm.applyTargetVersion(migrationApplyCfgs); err != nil {
@@ -206,6 +264,8 @@ func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFun
 	return nil
 }
 
+// checkMigrationsProtocol makes sure user sets --db-protocol flag as we need
+// this in order to apply other settings
 func (cdbm *CDBM) checkMigrationsProtocol() error {
 	if cdbm.MigrateFlags.MigrationsProtocol == "" {
 		return errors.WithStack(fmt.Errorf("--migrations-protocol required"))
@@ -229,6 +289,8 @@ func (cdbm *CDBM) checkMigrationsProtocol() error {
 	return nil
 }
 
+// applyQueries sets up our insert and update schema_migrations queries by
+// apply sql bind var
 func (cdbm *CDBM) applyQueries() error {
 	schemaInsert, _, err := webutil.InQueryRebind(
 		cdbm.DBProtocolCfg.SQLBindVar,
@@ -272,6 +334,8 @@ func (cdbm *CDBM) applyQueries() error {
 	return nil
 }
 
+// createLogsDirectory creates logs directory where errors during migration
+// will be written to
 func (cdbm *CDBM) createLogsDirectory() (*os.File, error) {
 	var err error
 
@@ -284,6 +348,9 @@ func (cdbm *CDBM) createLogsDirectory() (*os.File, error) {
 	return os.OpenFile(logDir+"logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 }
 
+// verifyFilesAndMigrations loops through given migration files and
+// verifies that they have appropriate naming convention and then
+// orders them based on file naming
 func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 	files, err := ioutil.ReadDir(cdbm.MigrateFlags.MigrationsDir)
 
@@ -380,9 +447,17 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		)
 	}
 
+	// Sort migrationApplyCfgs by version so migrations can happen in order
+	sort.SliceStable(migrationApplyCfgs, func(i, j int) bool {
+		return migrationApplyCfgs[i].Version < migrationApplyCfgs[j].Version
+	})
+
 	return migrationApplyCfgs, nil
 }
 
+// getSchemaMigration queries and returns schema_migration table info
+//
+// If schema_migrations table doesn't exist, it create its and return base info
 func (cdbm *CDBM) getSchemaMigration() (schemaMigration, error) {
 	var err error
 	var sm schemaMigration
@@ -432,10 +507,11 @@ func (cdbm *CDBM) getSchemaMigration() (schemaMigration, error) {
 		}
 	}
 
-	//cdbm.migrateCfg.SchemaMigration = sm
 	return sm, nil
 }
 
+// applyTargetVersion sets given target version and will return error if
+// version doesn't exist
 func (cdbm *CDBM) applyTargetVersion(cfgs []migrationApplyConfig) error {
 	if cdbm.MigrateFlags.TargetVersion > -1 {
 		if cdbm.MigrateFlags.TargetVersion > cfgs[len(cfgs)-1].Version {
@@ -449,6 +525,8 @@ func (cdbm *CDBM) applyTargetVersion(cfgs []migrationApplyConfig) error {
 	return nil
 }
 
+// resetDirtyFlag resets dirty flag if set and will return error if database
+// has dirty flag and --reset-dirty-flag is not set
 func (cdbm *CDBM) resetDirtyFlag() error {
 	var err error
 
@@ -474,6 +552,8 @@ func (cdbm *CDBM) resetDirtyFlag() error {
 	return nil
 }
 
+// migrationRollbackFail will rollback up migration if it fails to starting migration version
+// if --rollback-on-failure is set
 func (cdbm *CDBM) migrationRollbackFail(version int) error {
 	// If a migration fails, rollBackOnFailure is set and is currently an up migration,
 	// begin rolling back to version we started with
@@ -528,7 +608,7 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 					version,
 					true,
 					MigrateTypeDown,
-					true,
+					false,
 				); err != nil {
 					cdbm.migrateCfg.LogWriter(err)
 				}
@@ -546,10 +626,9 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 	return nil
 }
 
+// applyCustomMigration applies custom migration to database
 func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) error {
 	var err, innerErr error
-
-	fmt.Printf("custom version: %d\n", version)
 
 	if err = cmFunc(cdbm.DB); err != nil {
 		cdbm.migrateCfg.LogWriter(err)
@@ -647,18 +726,31 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 	return nil
 }
 
+// applyFileMigration applies file migration to database
 func (cdbm *CDBM) applyFileMigration(version int) error {
 	var err, innerErr error
 
-	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty &&
-		cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty && cdbm.migrateCfg.MigrateType == MigrateTypeUp {
 		if err = cdbm.migrateCfg.FileMigration(
 			cdbm.migrateCfg.Migrate,
 			version,
 			MigrateTypeDown,
-		); err != nil {
-			// Think about proper way to handle this later!!!!
-			return errors.WithStack(err)
+		); err != nil && !cdbm.MigrateFlags.SkipFileMigrationResetOnFailure {
+			cdbm.migrateCfg.LogWriter(err)
+
+			if _, err = cdbm.DB.Exec(
+				cdbm.migrateCfg.UpdateQuery,
+				version,
+				true,
+				MigrateTypeDown,
+				false,
+			); err != nil {
+				cdbm.migrateCfg.LogWriter(err)
+			}
+
+			return errors.WithStack(
+				fmt.Errorf("failed of resetting migration for version '%d'", version),
+			)
 		}
 
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty = false
@@ -731,6 +823,7 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 	return nil
 }
 
+// applyMigrationConfig will apply given migrationApplyConfig to database
 func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
 	fmt.Printf("apply migration version: %d\n", cfg.Version)
 
@@ -764,6 +857,7 @@ func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
 	return nil
 }
 
+// runMigrationConfigs will apply given slice of migrationApplyConfig to database
 func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 	var err error
 

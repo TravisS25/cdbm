@@ -11,6 +11,8 @@ import (
 )
 
 var (
+	// DefaultProtocolMap is global database protcol map used to determine
+	// different settings for migrate command based on what database user is using
 	DefaultProtocolMap = map[DBProtocol]DBProtocolConfig{
 		PostgresProtocol: {
 			DBProtocol:           PostgresProtocol,
@@ -38,38 +40,81 @@ const (
 	CockroachdbProtocol DBProtocol = "cockroachdb"
 )
 
+// DBProtocol represents different database protocols
 type DBProtocol string
 
 type ConnectionStringConfig struct {
 	DBSettings webutil.DatabaseSetting
 }
 
+// CDBM is main struct for app and is used for all commands
 type CDBM struct {
-	DB                *sqlx.DB                             `yaml:"-" mapstructure:"-"`
-	CurrentDBSettings webutil.DatabaseSetting              `yaml:"-" mapstructure:"-"`
-	DBProtocolCfg     DBProtocolConfig                     `yaml:"-" mapstructure:"-"`
-	MigrateFlags      MigrateFlagsConfig                   `yaml:"migrate_flags" mapstructure:"migrate_flags"`
-	RootFlags         RootFlagsConfig                      `yaml:"root_flags" mapstructure:"root_flags"`
-	DropFlags         DropFlagsConfig                      `yaml:"drop_flags" mapstructure:"drop_flags"`
-	LogFlags          LogFlagsConfig                       `yaml:"log_flags" mapstructure:"log_flags"`
-	DatabaseConfig    map[string][]webutil.DatabaseSetting `yaml:"database_config" mapstructure:"database_config"`
+	// DB is database connection used
+	//
+	// This will be set in NewCDBM
+	DB                *sqlx.DB                `yaml:"-" mapstructure:"-"`
+	CurrentDBSettings webutil.DatabaseSetting `yaml:"-" mapstructure:"-"`
 
+	// DBProtocolCfg is config used for different database settings based
+	// on database being used
+	//
+	// This will be set in NewCDBM
+	DBProtocolCfg DBProtocolConfig `yaml:"-" mapstructure:"-"`
+
+	// MigrateFlags represents the flags for migrate command
+	MigrateFlags MigrateFlagsConfig `yaml:"migrate_flags" mapstructure:"migrate_flags"`
+
+	// RootFlags represents the flags for root command
+	RootFlags RootFlagsConfig `yaml:"root_flags" mapstructure:"root_flags"`
+
+	// DropFlags represents the flags for drop command
+	DropFlags DropFlagsConfig `yaml:"drop_flags" mapstructure:"drop_flags"`
+
+	// LogFlags represents the flags for log command
+	LogFlags LogFlagsConfig `yaml:"log_flags" mapstructure:"log_flags"`
+
+	// DatabaseConfig is map with different db connections to database to be used
+	// if one or more fail
+	DatabaseConfig map[string][]webutil.DatabaseSetting `yaml:"database_config" mapstructure:"database_config"`
+
+	// migrateCfg is config that is built as the CDBM#Migrate function is run
 	migrateCfg migrateConfig
 }
 
+// DBProtocolConfig is config struct used to set up different settings
+// for migrate command based on database being used
 type DBProtocolConfig struct {
-	SQLBindVar           int
-	DatabaseType         string
-	DBProtocol           DBProtocol
+	// SQLBindVar determines what bind var to use for database
+	SQLBindVar int
+
+	// DatabaseType is what database is currently being used
+	DatabaseType string
+
+	// DBProtocol is what protocol to use when connecting to database
+	DBProtocol DBProtocol
+
+	// MigrationTableSearch determines if schema_migrations table exists
+	// in database or not
+	//
+	// Should return nil if schema_migrations is found
 	MigrationTableSearch func(db webutil.DBInterface) error
-	DriverConfig         interface{}
+
+	// DriverConfig is config struct used for migrate library
+	// for different settings based on database
+	DriverConfig interface{}
 }
 
+// FlagName is config struct to determine the long and short hand flag names
 type FlagName struct {
-	LongHand  string
+	// LongHand is long hand form of flag ie. --name
+	LongHand string
+
+	// Shoartnad is short hand form of flag ie. -n
 	ShortHand string
 }
 
+// schemaMigration represents schema_migration table along
+// with having a dynamic config
 type schemaMigration struct {
 	StartingVersion   int
 	Dirty             bool
@@ -78,10 +123,23 @@ type schemaMigration struct {
 	SchemaCfg         schemaConfig
 }
 
+// schemaConfig is used in conjunction with schemaMigration struct
+//
+// This config struct is used to keep different states that can happen
+// within migrate command
+//
+// Basically schemaMigration struct is used to query for entry in schema_migrations
+// and any changes made to that state is reflected in schemaConfig properties
+// so we don't change state of the original
 type schemaConfig struct {
-	NoRows   bool
+	// NoRows determines if schema_migrations table has no rows
+	NoRows bool
+
+	// HasEntry determines if there are any entries in the schema_migrations table
 	HasEntry bool
-	Dirty    bool
+
+	// Dirty determines if schema_migrations table is dirty
+	Dirty bool
 }
 
 // NewCDBM intiates a new *CDBM instance
@@ -95,6 +153,7 @@ func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 		return nil, err
 	}
 
+	// Overriding settings if set by flags
 	if cfg.DBProtocol != "" {
 		cdbm.RootFlags.DBProtocol = cfg.DBProtocol
 	}
@@ -139,15 +198,17 @@ func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 	}
 
 	if cdbm.RootFlags.DBProtocol == "" {
-		return nil, fmt.Errorf("--db-protocol flag required.  Valid --db-protocol values are: %v\n", protocolSlice)
+		return nil, fmt.Errorf("--db-protocol flag required.  Valid --db-protocol values are: %v", protocolSlice)
 	} else {
 		var ok bool
 
 		if cdbm.DBProtocolCfg, ok = DefaultProtocolMap[DBProtocol(cdbm.RootFlags.DBProtocol)]; !ok {
-			return nil, fmt.Errorf("Invalid --db-protocol.  Valid --db-protocol values are: %v\n", protocolSlice)
+			return nil, fmt.Errorf("Invalid --db-protocol.  Valid --db-protocol values are: %v", protocolSlice)
 		}
 	}
 
+	// Searches for database connection based on config and returns error
+	// if one can't be established
 	searchConn := func() error {
 		foundConn := false
 
@@ -190,7 +251,6 @@ func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 	if cfg.Database != "" {
 		if cfg.User == "" || cfg.Host == "" || cfg.Port == -1 {
 			return nil, fmt.Errorf("--user, --host and --port must be set if --database is set")
-			//return errors.WithStack(fmt.Errorf("--user, --host and --port must be set if --database is set"))
 		}
 
 		cdbm.CurrentDBSettings = webutil.DatabaseSetting{
@@ -222,7 +282,7 @@ func NewCDBM(cfg RootFlagsConfig, driverCfg interface{}) (*CDBM, error) {
 	}
 
 	if cdbm.DB == nil {
-		return nil, fmt.Errorf("No connection to database was established.  Check config file for proper settings\n")
+		return nil, fmt.Errorf("No connection to database was established.  Check config file for proper settings")
 	}
 
 	if driverCfg != nil {

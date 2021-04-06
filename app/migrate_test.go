@@ -1164,6 +1164,8 @@ func TestApplyFileMigration(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
+	dbProtcol := DefaultProtocolMap[DBProtocol(settings.BaseDatabaseSettings.DatabaseProtocol)]
+
 	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
 	defer dropCmd.Start()
 
@@ -1181,7 +1183,8 @@ func TestApplyFileMigration(t *testing.T) {
 
 	// Validating file up migration
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeUp,
 			UpdateQuery: updateQuery,
@@ -1202,7 +1205,8 @@ func TestApplyFileMigration(t *testing.T) {
 
 	// Validating file up migration error
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeUp,
 			UpdateQuery: updateQuery,
@@ -1228,7 +1232,8 @@ func TestApplyFileMigration(t *testing.T) {
 
 	// Validating file up migration error with successful rollback
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
 		MigrateFlags: MigrateFlagsConfig{
 			RollbackOnFailure: true,
 		},
@@ -1258,7 +1263,8 @@ func TestApplyFileMigration(t *testing.T) {
 
 	// Validating file up migration error and rollback error
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
 		MigrateFlags: MigrateFlagsConfig{
 			RollbackOnFailure: true,
 		},
@@ -1284,7 +1290,8 @@ func TestApplyFileMigration(t *testing.T) {
 
 	// Validating file down migration error
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeDown,
 			UpdateQuery: updateQuery,
@@ -1299,6 +1306,125 @@ func TestApplyFileMigration(t *testing.T) {
 		t.Errorf("should have error")
 	} else if err.Error() != "failed on file down migration for version: '2'" {
 		t.Errorf("should have file down migration error; got %s\n", err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	deleteFromSchemaMigration(t, db)
+
+	if _, err = db.DB.Exec(insertQuery, 2, true, MigrateTypeUp, false); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Validating migration reset error
+	mApp = &CDBM{
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
+		migrateCfg: migrateConfig{
+			MigrateType: MigrateTypeUp,
+			UpdateQuery: updateQuery,
+			LogWriter:   func(err error) {},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					Dirty: true,
+				},
+			},
+			FileMigration: func(mig *migrate.Migrate, version int, mt MigrationsType) error {
+				return fmt.Errorf("file migration error")
+			},
+		},
+	}
+
+	if err = mApp.applyFileMigration(2); err == nil {
+		t.Errorf("should have error")
+	} else if err.Error() != "failed of resetting migration for version '2'" {
+		t.Errorf("should have resetting migration error; got %s\n", err.Error())
+	}
+
+	var version int
+
+	if err = db.QueryRow(
+		`
+		select 
+			schema_migrations.version
+		from
+			schema_migrations
+		`,
+	).Scan(&version); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if version != 2 {
+		t.Errorf("should have version '2'; got %d\n", version)
+	}
+
+	// --------------------------------------------------------------------------
+
+	deleteFromSchemaMigration(t, db)
+
+	if _, err = db.DB.Exec(insertQuery, 2, true, MigrateTypeUp, false); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Validating successful file migration
+	mApp = &CDBM{
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
+		migrateCfg: migrateConfig{
+			MigrateType: MigrateTypeUp,
+			UpdateQuery: updateQuery,
+			LogWriter:   func(err error) {},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					Dirty: true,
+				},
+			},
+			FileMigration: func(mig *migrate.Migrate, version int, mt MigrationsType) error {
+				return nil
+			},
+		},
+	}
+
+	if err = mApp.applyFileMigration(2); err != nil {
+		t.Errorf("should not have error; got %s\n", err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	deleteFromSchemaMigration(t, db)
+
+	if _, err = db.DB.Exec(insertQuery, 2, true, MigrateTypeUp, false); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Validating we update schema migration properly on down migration
+	mApp = &CDBM{
+		DB:            db,
+		DBProtocolCfg: dbProtcol,
+		migrateCfg: migrateConfig{
+			MigrateType: MigrateTypeDown,
+			UpdateQuery: updateQuery,
+			CustomMigrations: map[int]CustomMigration{
+				1: {
+					Up: func(db webutil.DBInterface) error {
+						return nil
+					},
+				},
+			},
+			LogWriter: func(err error) {},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					Dirty: true,
+				},
+			},
+			FileMigration: func(mig *migrate.Migrate, version int, mt MigrationsType) error {
+				return nil
+			},
+		},
+	}
+
+	if err = mApp.applyFileMigration(2); err != nil {
+		t.Errorf("should not have error; got %s\n", err.Error())
 	}
 }
 
@@ -1325,6 +1451,8 @@ func TestApplyMigrationConfig(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
+	dbProtcolCfg := DefaultProtocolMap[DBProtocol(settings.BaseDatabaseSettings.DatabaseProtocol)]
+
 	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
 	defer dropCmd.Start()
 
@@ -1336,7 +1464,8 @@ func TestApplyMigrationConfig(t *testing.T) {
 
 	// Validating successful custom up migration
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcolCfg,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeUp,
 			InsertQuery: insertQuery,
@@ -1361,7 +1490,8 @@ func TestApplyMigrationConfig(t *testing.T) {
 
 	// Validating successful custom down migration
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcolCfg,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeDown,
 			InsertQuery: insertQuery,
@@ -1386,7 +1516,8 @@ func TestApplyMigrationConfig(t *testing.T) {
 
 	// Validating file up migration
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcolCfg,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeUp,
 			UpdateQuery: updateQuery,
@@ -1409,7 +1540,8 @@ func TestApplyMigrationConfig(t *testing.T) {
 
 	// Validating file down migration
 	mApp = &CDBM{
-		DB: db,
+		DB:            db,
+		DBProtocolCfg: dbProtcolCfg,
 		migrateCfg: migrateConfig{
 			MigrateType: MigrateTypeDown,
 			UpdateQuery: updateQuery,
