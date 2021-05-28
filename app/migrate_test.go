@@ -18,47 +18,6 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
-// func getTestMigrate(t *testing.T, importKey string) (*cdbm.CDBM, func()) {
-// 	utilSettings, err := cdbmutil.GetCDBMUtilSettings("")
-
-// 	if err != nil {
-// 		t.Fatalf(err.Error())
-// 	}
-
-// 	utilSettings.DBAction.Import.ImportKey = importKey
-
-// 	db, dbName, err := cdbmutil.GetNewDatabase(
-// 		utilSettings,
-// 		cdbm.DefaultExecCmd,
-// 		cdbmutil.DefaultGetDB,
-// 	)
-
-// 	fmt.Printf("%s\n", dbName)
-
-// 	if err != nil {
-// 		t.Fatalf("%+v\n", err.Error())
-// 	}
-
-// 	dropDB := func() {
-// 		dropCmd := exec.Command(
-// 			"/bin/sh",
-// 			"-c",
-// 			fmt.Sprintf(utilSettings.DBAction.DropDB, dbName),
-// 		)
-// 		dropCmd.Start()
-// 	}
-
-// 	app, err := cdbm.NewCDBM(cdbm.RootFlagsConfig{}, nil)
-
-// 	if err != nil {
-// 		t.Fatalf(err.Error())
-// 	}
-
-// 	app.DB = db
-
-// 	return app, dropDB
-// }
-
 func getSchemaInsert(t *testing.T, dbProtocol string) string {
 	schemaInsert, _, err := webutil.InQueryRebind(
 		DefaultProtocolMap[DBProtocol(dbProtocol)].SQLBindVar,

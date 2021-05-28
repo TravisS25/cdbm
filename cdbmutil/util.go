@@ -90,7 +90,6 @@ func GetNewDatabase(
 		fs := http.FileServer(http.Dir(testSettings.DBSetup.FileServerSetup.BaseSchemaDir))
 
 		go func() {
-			// fmt.Printf("filter server port: %s\n", testSettings.FileServerURL)
 			http.ListenAndServe(testSettings.DBSetup.FileServerSetup.FileServerURL, fs)
 		}()
 

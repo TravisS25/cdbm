@@ -150,7 +150,30 @@ func TestGetNewDatabase(t *testing.T) {
 			t.Errorf("Should have file error; got: %s\n", err.Error())
 		}
 	}
+}
 
+func TestGetNewDatabaseIntegrationTest(t *testing.T) {
+	var err error
+
+	settings, err := GetCDBMUtilSettings("")
+
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if _, _, err = GetNewDatabase(
+		settings,
+		func(c *exec.Cmd) error {
+			return c.Run()
+		},
+		DefaultGetDB,
+	); err == nil {
+		t.Errorf("Should have error")
+	} else {
+		if err.Error() != "file error" {
+			t.Errorf("Should have file error; got: %s\n", err.Error())
+		}
+	}
 }
 
 func TestGenerateNewDatabase(t *testing.T) {

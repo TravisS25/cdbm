@@ -774,6 +774,18 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 
 		if cdbm.MigrateFlags.RollbackOnFailure &&
 			cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+			if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty {
+				if _, innerErr = cdbm.DB.Exec(
+					cdbm.migrateCfg.UpdateQuery,
+					version,
+					false,
+					"",
+					false,
+				); innerErr != nil {
+					cdbm.migrateCfg.LogWriter(innerErr)
+				}
+			}
+
 			if innerErr = cdbm.migrationRollbackFail(version); innerErr != nil {
 				return fmt.Errorf(err.Error() + " and " + innerErr.Error())
 			}
@@ -782,6 +794,16 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 				err.Error()+" but successfully rolled back to version: '%d'",
 				cdbm.migrateCfg.SchemaMigration.StartingVersion,
 			)
+		} else {
+			if _, innerErr = cdbm.DB.Exec(
+				cdbm.migrateCfg.UpdateQuery,
+				version,
+				true,
+				cdbm.migrateCfg.MigrateType,
+				false,
+			); innerErr != nil {
+				cdbm.migrateCfg.LogWriter(innerErr)
+			}
 		}
 
 		return err

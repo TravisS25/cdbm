@@ -97,7 +97,6 @@ var migrateCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("migrate called")
 		defer globalApp.DB.Close()
 		return globalApp.Migrate(
 			app.DefaultGetMigrationFunc,

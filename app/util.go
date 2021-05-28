@@ -72,7 +72,7 @@ func GetCDBMConfig(env string) (*CDBM, error) {
 	var envUsed string
 
 	if env != "" {
-		envUsed = env
+		envUsed = os.Getenv(env)
 	} else {
 		envUsed = os.Getenv(defaultEnvVar)
 	}
