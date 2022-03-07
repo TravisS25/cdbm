@@ -1,0 +1,23 @@
+insert_end_query: " on conflict do nothing returning id;"
+db_setup:
+  file_server_setup:
+    base_schema_dir: /home/travis/programming/go/src/github.com/TravisS25/pac-server/test-files/sql/cockroach-test-scripts/
+    file_server_url: :9010
+db_action:
+  create_db: docker exec host-roach /cockroach/cockroach sql --insecure --execute="create database %s"
+  drop_db: docker exec host-roach /cockroach/cockroach sql --insecure --execute="drop database %s"
+  import:
+    import_keys: "schema"
+    import_map:
+      base_schema: docker exec host-roach sh -c "/cockroach/cockroach sql --insecure -d %s --execute=\"import pgdump 'http://localhost%s/pac_base_schema.sql'\" "
+      base_data: docker exec host-roach sh -c "/cockroach/cockroach sql --insecure -d %s --execute=\"import pgdump 'http://localhost%s/pac_base_schema_with_data.sql'\" "
+base_database_settings:
+  database_type: postgres
+  database_protocol: cockroachdb
+  settings:
+    base_auth_setting:
+      user: root
+      host: localhost
+      port: 26257
+    db_name: 
+    ssl_mode: disable 
