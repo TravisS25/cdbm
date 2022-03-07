@@ -19,8 +19,8 @@ type DBSetup struct {
 }
 
 type ImportConfig struct {
-	ImportKey string            `yaml:"import_key" mapstructure:"import_key"`
-	ImportMap map[string]string `yaml:"import_map" mapstructure:"import_map"`
+	ImportKeys []string          `yaml:"import_keys" mapstructure:"import_keys"`
+	ImportMap  map[string]string `yaml:"import_map" mapstructure:"import_map"`
 }
 
 type DBAction struct {

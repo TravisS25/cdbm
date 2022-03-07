@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/TravisS25/webutil/webutil"
@@ -31,10 +30,6 @@ func (fo *FileOverride) ReadUp(version uint) (r io.ReadCloser, identifier string
 
 func init() {
 	//source.Register("")
-}
-
-func DefaultExecCmd(c *exec.Cmd) error {
-	return c.Run()
 }
 
 func DefaultGetMigrationFunc(migDir string, db *sql.DB, protocolCfg DBProtocolConfig) (*migrate.Migrate, error) {
@@ -125,6 +120,43 @@ func GetMigrationConnStr(cfg ConnectionStringConfig, typ DBProtocol) string {
 	}
 
 	return ""
+}
+
+func MigrationInsertAndUpdateTable(
+	db webutil.QuerierExec,
+	sqlBindVar int,
+	insertQuery string,
+	updateQueries []string,
+) ([]interface{}, error) {
+	ids, err := webutil.QuerySingleColumn(
+		db,
+		sqlBindVar,
+		insertQuery,
+	)
+
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if updateQueries != nil {
+		for _, query := range updateQueries {
+			var updateQuery string
+
+			if updateQuery, _, err = webutil.InQueryRebind(
+				sqlBindVar,
+				query,
+				ids,
+			); err != nil {
+				return nil, errors.WithStack(err)
+			}
+
+			if _, err = db.Exec(updateQuery, ids); err != nil {
+				return nil, errors.WithStack(err)
+			}
+		}
+	}
+
+	return ids, nil
 }
 
 func AppendValuesQuery(

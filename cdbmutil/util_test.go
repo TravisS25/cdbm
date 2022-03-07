@@ -85,7 +85,7 @@ func TestGetNewDatabase(t *testing.T) {
 
 	// -----------------------------------------------------------------
 
-	mockSettings.DBAction.Import.ImportKey = ""
+	mockSettings.DBAction.Import.ImportKeys = []string{}
 
 	if _, _, err = GetNewDatabase(
 		mockSettings,
@@ -126,7 +126,7 @@ func TestGetNewDatabase(t *testing.T) {
 
 	// -----------------------------------------------------------------
 
-	mockSettings.DBAction.Import.ImportKey = "schema"
+	mockSettings.DBAction.Import.ImportKeys = []string{"schema"}
 
 	if _, _, err = GetNewDatabase(
 		mockSettings,

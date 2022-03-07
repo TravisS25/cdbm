@@ -4,6 +4,8 @@ go 1.15
 
 replace github.com/TravisS25/webutil => /home/travis/programming/go/src/github.com/TravisS25/webutil
 
+replace github.com/jmoiron/sqlx => /home/travis/programming/go/src/github.com/jmoiron/sqlx
+
 require (
 	github.com/TravisS25/webutil v0.0.0-00010101000000-000000000000
 	github.com/golang-migrate/migrate/v4 v4.14.1

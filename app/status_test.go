@@ -27,7 +27,7 @@ func ExampleCDBM_Status_a() {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		utilSettings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -71,7 +71,7 @@ func ExampleCDBM_Status_b() {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		utilSettings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 

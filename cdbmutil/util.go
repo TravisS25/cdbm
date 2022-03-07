@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/TravisS25/webutil/webutil"
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
@@ -37,10 +36,6 @@ func GetCDBMUtilSettings(envVar string) (CDBMUtilSettings, error) {
 	}
 
 	return settings, nil
-}
-
-func DefaultGetDB(dbSettings BaseDatabaseSettings) (*sqlx.DB, error) {
-	return webutil.NewDB(dbSettings.Settings, dbSettings.DatabaseType)
 }
 
 func GetNewDatabase(
@@ -89,54 +84,93 @@ func GetNewDatabase(
 	if testSettings.DBSetup.FileServerSetup != nil {
 		fs := http.FileServer(http.Dir(testSettings.DBSetup.FileServerSetup.BaseSchemaDir))
 
+		fmt.Printf("dir: %s\n", testSettings.DBSetup.FileServerSetup.BaseSchemaDir)
+
 		go func() {
 			http.ListenAndServe(testSettings.DBSetup.FileServerSetup.FileServerURL, fs)
 		}()
 
-		cmdStr, ok := testSettings.DBAction.Import.ImportMap[testSettings.DBAction.Import.ImportKey]
+		for _, key := range testSettings.DBAction.Import.ImportKeys {
+			cmdStr, ok := testSettings.DBAction.Import.ImportMap[key]
 
-		if !ok {
-			return nil, "", fmt.Errorf("file import key does not exist")
-		}
+			if !ok {
+				return nil, "", fmt.Errorf("file import key '%s' does not exist", key)
+			}
 
-		importCmd := exec.Command(
-			"/bin/sh",
-			"-c",
-			fmt.Sprintf(
-				cmdStr,
-				dbName,
-				testSettings.DBSetup.FileServerSetup.FileServerURL,
-			),
-		)
-		importCmd.Stderr = stdErr
+			importCmd := exec.Command(
+				"/bin/sh",
+				"-c",
+				fmt.Sprintf(
+					cmdStr,
+					dbName,
+					testSettings.DBSetup.FileServerSetup.FileServerURL,
+				),
+			)
+			importCmd.Stderr = stdErr
 
-		if hasError(cmdFunc(importCmd)) {
-			return nil, "", errors.WithStack(fmt.Errorf(stdErr.String()))
+			fmt.Printf("importcmd: %s\n", importCmd)
+
+			if hasError(cmdFunc(importCmd)) {
+				return nil, "", errors.WithStack(fmt.Errorf(stdErr.String()))
+			}
 		}
 	} else if testSettings.DBSetup.BaseSchemaFile != "" {
-		cmdStr, ok := testSettings.DBAction.Import.ImportMap[testSettings.DBAction.Import.ImportKey]
+		for _, key := range testSettings.DBAction.Import.ImportKeys {
+			cmdStr, ok := testSettings.DBAction.Import.ImportMap[key]
 
-		if !ok {
-			return nil, "", fmt.Errorf("file import key does not exist")
-		}
+			if !ok {
+				return nil, "", fmt.Errorf("file import key '%s' does not exist", key)
+			}
 
-		importCmd := exec.Command(
-			"/bin/sh",
-			"-c",
-			fmt.Sprintf(
-				cmdStr,
-				dbName,
-				testSettings.DBSetup.BaseSchemaFile,
-			),
-		)
-		importCmd.Stderr = stdErr
+			importCmd := exec.Command(
+				"/bin/sh",
+				"-c",
+				fmt.Sprintf(
+					cmdStr,
+					dbName,
+					testSettings.DBSetup.BaseSchemaFile,
+				),
+			)
+			importCmd.Stderr = stdErr
 
-		if hasError(cmdFunc(importCmd)) {
-			return nil, "", errors.WithStack(fmt.Errorf(stdErr.String()))
+			if hasError(cmdFunc(importCmd)) {
+				return nil, "", errors.WithStack(fmt.Errorf(stdErr.String()))
+			}
 		}
 	}
 
 	return db, dbName, nil
+}
+
+func GetMigrationSetupTeardown(envVar string, importKeys []string) (*sqlx.DB, func(), error) {
+	utilSettings, err := GetCDBMUtilSettings(envVar)
+
+	if err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+
+	utilSettings.DBAction.Import.ImportKeys = importKeys
+
+	db, dbName, err := GetNewDatabase(
+		utilSettings,
+		DefaultExecCmd,
+		DefaultGetDB,
+	)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	dropDB := func() {
+		dropCmd := exec.Command(
+			"/bin/sh",
+			"-c",
+			fmt.Sprintf(utilSettings.DBAction.DropDB, dbName),
+		)
+		dropCmd.Start()
+	}
+
+	return db, dropDB, nil
 }
 
 func GetRandomString(length int) string {

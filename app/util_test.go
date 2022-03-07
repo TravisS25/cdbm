@@ -36,7 +36,7 @@ func TestAppendValuesQuery(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		utilSettings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 

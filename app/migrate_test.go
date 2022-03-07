@@ -542,7 +542,7 @@ func TestResetDirtyFlag(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -640,7 +640,7 @@ func TestMigrationRollbackFail(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -813,7 +813,7 @@ func TestApplyCustomMigration(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -1115,7 +1115,7 @@ func TestApplyFileMigration(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -1402,7 +1402,7 @@ func TestApplyMigrationConfig(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -1535,7 +1535,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -1923,7 +1923,7 @@ func TestSuccessfulMigrate(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -2269,7 +2269,7 @@ func TestDirtyUpMigrate(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -2532,7 +2532,7 @@ func TestDirtyDownMigrate(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -2802,7 +2802,7 @@ func TestRollbackMigrate(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
@@ -3001,7 +3001,7 @@ func TestMigrateItself(t *testing.T) {
 
 	db, dbName, err := cdbmutil.GetNewDatabase(
 		settings,
-		DefaultExecCmd,
+		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
 	)
 
