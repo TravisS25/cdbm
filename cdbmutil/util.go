@@ -2,6 +2,7 @@ package cdbmutil
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -9,20 +10,27 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/TravisS25/webutil/webutil"
+	"github.com/golang-migrate/migrate/v4/database"
+	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 )
 
+// GetCDBMUtilSettings retrieves CDBMUtilSettings based on envVar parameter passed
+//
+// If envVar is empty string, then CDBM_UTIL_CONFIG is used as default
 func GetCDBMUtilSettings(envVar string) (CDBMUtilSettings, error) {
 	var settings CDBMUtilSettings
 	var err error
 	var envUsed string
 
 	if envVar != "" {
-		envUsed = envVar
+		envUsed = os.Getenv(envVar)
 	} else {
-		envUsed = os.Getenv(defaultEnvVar)
+		envUsed = os.Getenv(CDBM_UTIL_CONFIG)
 	}
 
 	viper.SetConfigFile(envUsed)
@@ -38,6 +46,7 @@ func GetCDBMUtilSettings(envVar string) (CDBMUtilSettings, error) {
 	return settings, nil
 }
 
+// GetNewDatabase will retrieve instance of sqlx.DB along with database name based on settings passed
 func GetNewDatabase(
 	testSettings CDBMUtilSettings,
 	cmdFunc func(*exec.Cmd) error,
@@ -142,23 +151,30 @@ func GetNewDatabase(
 	return db, dbName, nil
 }
 
-func GetMigrationSetupTeardown(envVar string, importKeys []string) (*sqlx.DB, func(), error) {
-	utilSettings, err := GetCDBMUtilSettings(envVar)
+// GetMigrationSetupTeardown will retrieve instance of sqlx.DB along with function, that when called,
+// will delete the currently created database
+func GetMigrationSetupTeardown(
+	cdbmUtilEnvVar string,
+	execCmd func(*exec.Cmd) error,
+	getDB func(BaseDatabaseSettings) (*sqlx.DB, error),
+	importKeys []string,
+) (MigrationSetupTeardownReturn, error) {
+	utilSettings, err := GetCDBMUtilSettings(cdbmUtilEnvVar)
 
 	if err != nil {
-		return nil, nil, errors.WithStack(err)
+		return MigrationSetupTeardownReturn{}, errors.WithStack(err)
 	}
 
 	utilSettings.DBAction.Import.ImportKeys = importKeys
 
 	db, dbName, err := GetNewDatabase(
 		utilSettings,
-		DefaultExecCmd,
-		DefaultGetDB,
+		execCmd,
+		getDB,
 	)
 
 	if err != nil {
-		return nil, nil, err
+		return MigrationSetupTeardownReturn{}, errors.WithStack(err)
 	}
 
 	dropDB := func() {
@@ -170,9 +186,14 @@ func GetMigrationSetupTeardown(envVar string, importKeys []string) (*sqlx.DB, fu
 		dropCmd.Start()
 	}
 
-	return db, dropDB, nil
+	return MigrationSetupTeardownReturn{
+		DB:       db,
+		Settings: utilSettings,
+		TearDown: dropDB,
+	}, nil
 }
 
+// GetRandomString generates random string based on length passed
 func GetRandomString(length int) string {
 	allowedChars := "abcdefghijklmnopqrstuvwxyz"
 	size := len(allowedChars)
@@ -185,4 +206,73 @@ func GetRandomString(length int) string {
 	}
 
 	return string(b)
+}
+
+// GetDatabaseDriver retrieves database driver for migrate based on parameters passed
+func GetDatabaseDriver(db *sql.DB, protcol DBProtocol, cfg interface{}) (database.Driver, error) {
+	var ok bool
+
+	switch protcol {
+	case PostgresProtocol:
+		if cfg == nil {
+			return postgres.WithInstance(db, &postgres.Config{})
+		}
+
+		if _, ok = cfg.(*postgres.Config); !ok {
+			return nil, fmt.Errorf("config must be type *postgres.Config")
+		}
+
+		return postgres.WithInstance(db, cfg.(*postgres.Config))
+	case CockroachdbProtocol:
+		if cfg == nil {
+			return cockroachdb.WithInstance(db, &cockroachdb.Config{})
+		}
+
+		if _, ok = cfg.(*cockroachdb.Config); !ok {
+			return nil, fmt.Errorf("config must be type *cockroachdb.Config")
+		}
+
+		return cockroachdb.WithInstance(db, cfg.(*cockroachdb.Config))
+	default:
+		return nil, fmt.Errorf("invalid db protocol")
+	}
+}
+
+// MigrationInsertAndUpdateTable is util function that should take in a bulk insert query that returns
+// the ids of all the inserts and will also execute multiple update queries based on the returned ids if passed
+//
+// updateQueries parameter can be nil
+func MigrationInsertAndUpdateTable(
+	db webutil.QuerierExec,
+	sqlBindVar int,
+	insertQuery string,
+	updateQueries []string,
+) ([]interface{}, error) {
+	ids, err := webutil.QuerySingleColumn(
+		db,
+		sqlBindVar,
+		insertQuery,
+	)
+
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	for _, query := range updateQueries {
+		var updateQuery string
+
+		if updateQuery, _, err = webutil.InQueryRebind(
+			sqlBindVar,
+			query,
+			ids,
+		); err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		if _, err = db.Exec(updateQuery, ids); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
+
+	return ids, nil
 }

@@ -16,6 +16,9 @@ limitations under the License.
 package cmd
 
 import (
+	"fmt"
+
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -40,8 +43,32 @@ var dropCmd = &cobra.Command{
 		globalApp.DropFlags.Confirm = confirm
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		//fmt.Println("drop called")
-		return globalApp.Drop()
+		if globalApp.DropFlags.Confirm {
+			return globalApp.Drop()
+		}
+
+		var answer string
+		var err error
+
+		fmt.Printf("You are about to drop entire database.  Are you sure you want to continue (y/n)? ")
+
+		for {
+			if _, err = fmt.Scanln(&answer); err != nil {
+				return errors.WithStack(err)
+			}
+
+			if answer == "y" || answer == "n" {
+				break
+			}
+
+			fmt.Printf("(y/n)? \n")
+		}
+
+		if answer == "y" {
+			return globalApp.Drop()
+		}
+
+		return nil
 	},
 }
 

@@ -22,11 +22,11 @@ import (
 )
 
 type logsNameConfig struct {
-	MigrationsDir flagName
+	LogFile flagName
 }
 
 var logsNameCfg = migrateNameConfig{
-	MigrationsDir: flagName{
+	LogFile: flagName{
 		LongHand:  "migrations-dir",
 		ShortHand: "m",
 	},
@@ -43,13 +43,13 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsDir.LongHand)
+		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.LogFile.LongHand)
 
 		if migrationDir != "" {
-			globalApp.LogFlags.MigrationsDir = migrationDir
+			globalApp.LogFlags.LogFile = migrationDir
 		}
 
-		if globalApp.LogFlags.MigrationsDir == "" {
+		if globalApp.LogFlags.LogFile == "" {
 			return fmt.Errorf("--migrations-dir is required")
 		}
 
@@ -64,8 +64,8 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 
 	logsCmd.Flags().StringP(
-		logsNameCfg.MigrationsDir.LongHand,
-		logsNameCfg.MigrationsDir.ShortHand,
+		logsNameCfg.LogFile.LongHand,
+		logsNameCfg.LogFile.ShortHand,
 		"",
 		"Directory where migration files are located",
 	)

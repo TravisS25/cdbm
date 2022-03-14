@@ -11,14 +11,14 @@ func ExampleCDBM_Status_a() {
 	utilSettings, err := cdbmutil.GetCDBMUtilSettings("")
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
 	settings, err := GetCDBMConfig("")
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
@@ -32,7 +32,7 @@ func ExampleCDBM_Status_a() {
 	)
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
@@ -40,11 +40,11 @@ func ExampleCDBM_Status_a() {
 
 	cdbm := &CDBM{
 		DB:            db,
-		DBProtocolCfg: DefaultProtocolMap[DBProtocol(settings.RootFlags.DBProtocol)],
+		DBProtocolCfg: cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(settings.RootFlags.DBProtocol)],
 	}
 
 	if err = cdbm.Status(); err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
@@ -55,14 +55,14 @@ func ExampleCDBM_Status_b() {
 	utilSettings, err := cdbmutil.GetCDBMUtilSettings("")
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
 	settings, err := GetCDBMConfig("")
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
@@ -76,7 +76,7 @@ func ExampleCDBM_Status_b() {
 	)
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
@@ -84,7 +84,7 @@ func ExampleCDBM_Status_b() {
 
 	cdbm := &CDBM{
 		DB:            db,
-		DBProtocolCfg: DefaultProtocolMap[DBProtocol(settings.RootFlags.DBProtocol)],
+		DBProtocolCfg: cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(settings.RootFlags.DBProtocol)],
 	}
 
 	if _, err = db.Exec(
@@ -96,7 +96,7 @@ func ExampleCDBM_Status_b() {
 		);
 		`,
 	); err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
@@ -106,12 +106,12 @@ func ExampleCDBM_Status_b() {
 		values(2, true, 'Up');
 		`,
 	); err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 
 	if err = cdbm.Status(); err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%+v", err)
 		return
 	}
 

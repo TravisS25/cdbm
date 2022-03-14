@@ -2,6 +2,7 @@ package app
 
 import "fmt"
 
+// Status will print out to stdout the current database migration table status
 func (cdbm *CDBM) Status() error {
 	var err error
 
@@ -11,6 +12,9 @@ func (cdbm *CDBM) Status() error {
 		return err
 	}
 
+	// If there are no rows in table, then no migration has happended so print to stdout
+	//
+	// Else display current migration status
 	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
 		fmt.Printf("No migration entry\n")
 	} else {

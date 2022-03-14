@@ -1,57 +1,59 @@
 package app
 
-// func TestDrop(t *testing.T) {
-// 	utilSettings, err := cdbmutil.GetCDBMUtilSettings("")
+import (
+	"os"
+	"testing"
 
-// 	if err != nil {
-// 		t.Fatalf(err.Error())
-// 		return
-// 	}
+	"github.com/TravisS25/cdbm/cdbmutil"
+)
 
-// 	utilSettings.DBSetup.FileServerSetup = nil
-// 	utilSettings.DBSetup.BaseSchemaFile = ""
+func TestDrop(t *testing.T) {
+	returnCfg, err := cdbmutil.GetMigrationSetupTeardown(
+		cdbmutil.CDBM_UTIL_CONFIG,
+		cdbmutil.DefaultExecCmd,
+		cdbmutil.DefaultGetDB,
+		[]string{"base_schema"},
+	)
 
-// 	db, dbName, err := cdbmutil.GetNewDatabase(
-// 		utilSettings,
-// 		DefaultExecCmd,
-// 		cdbmutil.DefaultGetDB,
-// 	)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
 
-// 	if err != nil {
-// 		t.Fatalf(err.Error())
-// 		return
-// 	}
+	defer returnCfg.TearDown()
 
-// 	defer exec.Command("/bin/sh", "-c", fmt.Sprintf(utilSettings.DBAction.DropDB, dbName)).Start()
+	rootDir := "/tmp/migrate-drop/"
+	migrationsDir := rootDir + "migrations/"
 
-// 	rootDir := "/tmp/migrate-drop/"
-// 	migrationsDir := rootDir + "migrations/"
+	cdbm, err := NewTestCDBM(
+		returnCfg.DB,
+		cdbmutil.DBProtocol(returnCfg.Settings.BaseDatabaseSettings.DatabaseProtocol),
+		MigrateFlagsConfig{
+			MigrationsDir:      migrationsDir,
+			MigrationsProtocol: cdbmutil.FileProtocol,
+		},
+	)
 
-// 	cdbm := &CDBM{
-// 		DB: db,
-// 		MigrateFlags: MigrateFlagsConfig{
-// 			MigrationsDir: migrationsDir,
-// 		},
-// 		DBProtocolCfg: DefaultProtocolMap[DBProtocol(utilSettings.BaseDatabaseSettings.DatabaseProtocol)],
-// 	}
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
 
-// 	defer os.RemoveAll(migrationsDir)
+	defer os.RemoveAll(migrationsDir)
 
-// 	// --------------------------------------------------------------------------
+	// --------------------------------------------------------------------------
 
-// 	if err = os.RemoveAll(migrationsDir); err != nil {
-// 		t.Fatalf(err.Error())
-// 	}
+	if err = os.RemoveAll(migrationsDir); err != nil {
+		t.Fatalf(err.Error())
+	}
 
-// 	if err = os.MkdirAll(migrationsDir, os.ModePerm); err != nil {
-// 		t.Fatalf(err.Error())
-// 	}
+	if err = os.MkdirAll(migrationsDir, os.ModePerm); err != nil {
+		t.Fatalf(err.Error())
+	}
 
-// 	if _, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
-// 		t.Fatalf(err.Error())
-// 	}
+	if _, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
+		t.Fatalf(err.Error())
+	}
 
-// 	if err = cdbm.Drop(); err != nil {
-// 		t.Fatalf(err.Error())
-// 	}
-// }
+	if err = cdbm.Drop(); err != nil {
+		t.Fatalf("%+v", err)
+	}
+}

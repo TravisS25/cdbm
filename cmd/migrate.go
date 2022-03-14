@@ -18,7 +18,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/TravisS25/cdbm/app"
+	"github.com/TravisS25/cdbm/cdbmutil"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +26,7 @@ type migrateNameConfig struct {
 	ResetDirtyFlag     flagName
 	TargetVersion      flagName
 	RollbackOnFailure  flagName
-	MigrationsDir      flagName
+	LogFile            flagName
 	MigrationsProtocol flagName
 }
 
@@ -39,7 +39,7 @@ var migrateNameCfg = migrateNameConfig{
 		LongHand:  "rollback-on-failure",
 		ShortHand: "f",
 	},
-	MigrationsDir: flagName{
+	LogFile: flagName{
 		LongHand:  "migrations-dir",
 		ShortHand: "m",
 	},
@@ -67,8 +67,8 @@ var migrateCmd = &cobra.Command{
 	`,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		targetVersion, _ := cmd.Flags().GetInt(migrateNameCfg.TargetVersion.LongHand)
-		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsDir.LongHand)
-		rollbackOnFailure, _ := cmd.Flags().GetBool(migrateNameCfg.MigrationsDir.LongHand)
+		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.LogFile.LongHand)
+		rollbackOnFailure, _ := cmd.Flags().GetBool(migrateNameCfg.LogFile.LongHand)
 		resetDirtyFlag, _ := cmd.Flags().GetBool(migrateNameCfg.ResetDirtyFlag.LongHand)
 		migrationsProtocol, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsProtocol.LongHand)
 
@@ -85,9 +85,9 @@ var migrateCmd = &cobra.Command{
 			globalApp.MigrateFlags.ResetDirtyFlag = resetDirtyFlag
 		}
 		if migrationsProtocol != "" {
-			globalApp.MigrateFlags.MigrationsProtocol = app.MigrationsProtocol(migrationsProtocol)
+			globalApp.MigrateFlags.MigrationsProtocol = cdbmutil.MigrationsProtocol(migrationsProtocol)
 		} else if globalApp.MigrateFlags.MigrationsProtocol == "" {
-			globalApp.MigrateFlags.MigrationsProtocol = app.FileProtocol
+			globalApp.MigrateFlags.MigrationsProtocol = cdbmutil.FileProtocol
 		}
 
 		if globalApp.MigrateFlags.MigrationsDir == "" {
@@ -99,9 +99,9 @@ var migrateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		defer globalApp.DB.Close()
 		return globalApp.Migrate(
-			app.DefaultGetMigrationFunc,
-			app.DefaultFileMigrationFunc,
-			map[int]app.CustomMigration{},
+			cdbmutil.DefaultGetMigrationFunc,
+			cdbmutil.DefaultFileMigrationFunc,
+			map[int]cdbmutil.CustomMigration{},
 		)
 	},
 }
@@ -118,8 +118,8 @@ func init() {
 		"Migrate to specific version",
 	)
 	migrateCmd.Flags().StringP(
-		migrateNameCfg.MigrationsDir.LongHand,
-		migrateNameCfg.MigrationsDir.ShortHand,
+		migrateNameCfg.LogFile.LongHand,
+		migrateNameCfg.LogFile.ShortHand,
 		"",
 		"Directory where migration files are located",
 	)

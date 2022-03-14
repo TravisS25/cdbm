@@ -74,7 +74,7 @@ func TestAppendValuesQuery(t *testing.T) {
 	insertQuery := "insert into bar(name) values "
 	updateQuery := "update foo set migration_complete = true where id in (?)"
 	valuesQuery := ""
-	sqlBindVar := DefaultProtocolMap[DBProtocol(utilSettings.BaseDatabaseSettings.DatabaseProtocol)].SQLBindVar
+	sqlBindVar := cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(utilSettings.BaseDatabaseSettings.DatabaseProtocol)].SQLBindVar
 	counter := uint(0)
 
 	fooRows, err := db.Queryx("select foo.name from foo")

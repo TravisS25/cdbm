@@ -11,76 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TravisS25/cdbm/cdbmutil"
 	"github.com/TravisS25/webutil/webutil"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/pkg/errors"
 )
-
-const (
-	MigrateTypeUp    MigrationsType = "Up"
-	MigrateTypeDown  MigrationsType = "Down"
-	MigrateTypeForce MigrationsType = "Force"
-)
-
-const (
-	FileProtocol               MigrationsProtocol = "file://"
-	GoBindData                 MigrationsProtocol = "go-bindata"
-	GithubProtocol             MigrationsProtocol = "github://"
-	GitHubEnterpriseProtocol   MigrationsProtocol = "github-ee://"
-	BitbucketProtocol          MigrationsProtocol = "bitbucket://"
-	GitlabProtcol              MigrationsProtocol = "gitlab://"
-	S3Protocol                 MigrationsProtocol = "s3://"
-	GoogleCloudStorageProtocol MigrationsProtocol = "gcs://"
-)
-
-var (
-	ErrInvalidFileName = fmt.Errorf("cdbm: invalid sql file name - proper naming:<version>_<description>.<'up'|'down'>.sql")
-
-	migrationsProtocolList = []MigrationsProtocol{
-		FileProtocol,
-		GoBindData,
-		GithubProtocol,
-		GitHubEnterpriseProtocol,
-		BitbucketProtocol,
-		GitlabProtcol,
-		S3Protocol,
-		GoogleCloudStorageProtocol,
-	}
-)
-
-// postgresMigrationTableSearch is default search function for postgres to
-// determine if schema_migrations table exists in database table
-var postgresMigrationTableSearch = func(db webutil.DBInterface) error {
-	var filler string
-	var err error
-
-	if err = db.QueryRowx(
-		`
-		select 
-			table_name 
-		from 
-			information_schema.tables 
-		where  
-			table_schema = 'public'
-		and    
-			table_name = 'schema_migrations' 
-		`,
-	).Scan(&filler); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// CustomMigration is config struct used to migrate database with
-// custom go code
-type CustomMigration struct {
-	// Up should migrate database to next state
-	Up CustomMigrationFunc
-
-	// Down should migrate database to previous state
-	Down CustomMigrationFunc
-}
 
 // MigrateFlagsConfig is flag config struct for migrate command set by command line
 // or set in code if used a library
@@ -115,27 +50,11 @@ type MigrateFlagsConfig struct {
 	SkipFileMigrationResetOnFailure bool `yaml:"skip_migration_reset_on_failure" mapstructure:"skip_migration_reset_on_failure"`
 
 	// MigrationsProtocol is protocol used to retrieve migration files
-	MigrationsProtocol MigrationsProtocol `yaml:"migrations_protocol" mapstructure:"migrations_protocol"`
+	MigrationsProtocol cdbmutil.MigrationsProtocol `yaml:"migrations_protocol" mapstructure:"migrations_protocol"`
 
 	// MigrationsDir is directory where migration files are stored whether locally or remotely
 	MigrationsDir string `yaml:"migrations_dir" mapstructure:"migrations_dir"`
 }
-
-// MigrationsType is enum for different migration type ie. "Up", "Down", "Force"
-type MigrationsType string
-
-// MigrationsProtocol is enum for different database protocols
-type MigrationsProtocol string
-
-// FileMigrationFunc should implement migrating database up or down
-type FileMigrationFunc func(mig *migrate.Migrate, version int, mt MigrationsType) error
-
-// CustomMigrationFunc should implement migrating database up or down through custom code
-type CustomMigrationFunc func(db webutil.DBInterface) error
-
-// GetMigrationFunc should implement getting migrate.Migrate based on migrations
-// directory and database instance
-type GetMigrationFunc func(migDir string, db *sql.DB, protocolCfg DBProtocolConfig) (*migrate.Migrate, error)
 
 // migrationApplyConfig is config struct to apply migrations and version
 type migrationApplyConfig struct {
@@ -143,10 +62,14 @@ type migrationApplyConfig struct {
 	Version int
 
 	// CustomMigration is custom migrations to apply if set
-	CustomMigration CustomMigration
+	CustomMigration cdbmutil.CustomMigration
 }
 
-type migrateConfig struct {
+// migrateState is struct used to keep track of certain states as migration is being run
+//
+// This will be used in the CDBM struct and all properties of this struct should be
+// set by the CDBM#Migrate function
+type migrateState struct {
 	// LogWriter will write migrate errors to file system
 	LogWriter func(error)
 
@@ -160,13 +83,13 @@ type migrateConfig struct {
 	TargetVersion int
 
 	// MigrateType determines if we are migrating "Up" "Down" "Force"
-	MigrateType MigrationsType
+	MigrateType cdbmutil.MigrationsType
 
 	// FileMigration runs migration against database
-	FileMigration FileMigrationFunc
+	FileMigration cdbmutil.FileMigrationFunc
 
 	// CustomMigrations is map of custom migrations
-	CustomMigrations map[int]CustomMigration
+	CustomMigrations map[int]cdbmutil.CustomMigration
 
 	// SchemaMigration represents schema_migrations table
 	SchemaMigration schemaMigration
@@ -176,14 +99,18 @@ type migrateConfig struct {
 }
 
 // Migrate migrates database based on given settings
-func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFunc, cMigrations map[int]CustomMigration) error {
+func (cdbm *CDBM) Migrate(
+	getMigFunc cdbmutil.GetMigrationFunc,
+	fMigFunc cdbmutil.FileMigrationFunc,
+	cMigrations map[int]cdbmutil.CustomMigration,
+) error {
 	var err error
 
 	if err = cdbm.checkMigrationsProtocol(); err != nil {
 		return err
 	}
 
-	if err = cdbm.applyQueries(); err != nil {
+	if err = cdbm.applySchemaMigrationsQueries(); err != nil {
 		return err
 	}
 
@@ -196,13 +123,15 @@ func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFun
 		return err
 	}
 
-	defer logFile.Close()
+	if logFile != nil {
+		defer logFile.Close()
 
-	logWriter := bufio.NewWriter(logFile)
-	defer logWriter.Flush()
+		logWriter := bufio.NewWriter(logFile)
+		defer logWriter.Flush()
 
-	cdbm.migrateCfg.LogWriter = func(innerErr error) {
-		logWriter.WriteString(time.Now().UTC().Format(webutil.FormDateTimeLayout) + ": " + innerErr.Error() + "\n")
+		cdbm.migrateCfg.LogWriter = func(innerErr error) {
+			logWriter.WriteString(time.Now().UTC().Format(webutil.FormDateTimeLayout) + ": " + innerErr.Error() + "\n")
+		}
 	}
 
 	// Query current migration status and set to CDBM#migrateCfg#SchemaMigration
@@ -242,10 +171,10 @@ func (cdbm *CDBM) Migrate(getMigFunc GetMigrationFunc, fMigFunc FileMigrationFun
 	// or if schemaMigrations#NoRows is true than we know no migrations have been applied yet
 	if cdbm.migrateCfg.SchemaMigration.StartingVersion != cdbm.migrateCfg.TargetVersion ||
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows || cdbm.migrateCfg.SchemaMigration.Dirty {
-		cdbm.migrateCfg.MigrateType = MigrateTypeUp
+		cdbm.migrateCfg.MigrateType = cdbmutil.MigrateTypeUp
 
 		if cdbm.migrateCfg.SchemaMigration.StartingVersion > cdbm.migrateCfg.TargetVersion {
-			cdbm.migrateCfg.MigrateType = MigrateTypeDown
+			cdbm.migrateCfg.MigrateType = cdbmutil.MigrateTypeDown
 		}
 
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry = true
@@ -272,7 +201,18 @@ func (cdbm *CDBM) checkMigrationsProtocol() error {
 	} else {
 		found := false
 
-		for _, v := range migrationsProtocolList {
+		pList := []cdbmutil.MigrationsProtocol{
+			cdbmutil.FileProtocol,
+			cdbmutil.GoBindData,
+			cdbmutil.GithubProtocol,
+			cdbmutil.GitHubEnterpriseProtocol,
+			cdbmutil.BitbucketProtocol,
+			cdbmutil.GitlabProtcol,
+			cdbmutil.S3Protocol,
+			cdbmutil.GoogleCloudStorageProtocol,
+		}
+
+		for _, v := range pList {
 			if v == cdbm.MigrateFlags.MigrationsProtocol {
 				found = true
 				break
@@ -281,7 +221,7 @@ func (cdbm *CDBM) checkMigrationsProtocol() error {
 
 		if !found {
 			return errors.WithStack(
-				fmt.Errorf("invalid --migrations-protocol;  Valid --migrations-protocol are %v", migrationsProtocolList),
+				fmt.Errorf("invalid --migrations-protocol;  Valid --migrations-protocol are %v", pList),
 			)
 		}
 	}
@@ -289,9 +229,9 @@ func (cdbm *CDBM) checkMigrationsProtocol() error {
 	return nil
 }
 
-// applyQueries sets up our insert and update schema_migrations queries by
-// apply sql bind var
-func (cdbm *CDBM) applyQueries() error {
+// applySchemaMigrationsQueries sets up our insert and update schema_migrations queries by
+// applying sql bind var
+func (cdbm *CDBM) applySchemaMigrationsQueries() error {
 	schemaInsert, _, err := webutil.InQueryRebind(
 		cdbm.DBProtocolCfg.SQLBindVar,
 		`
@@ -337,15 +277,15 @@ func (cdbm *CDBM) applyQueries() error {
 // createLogsDirectory creates logs directory where errors during migration
 // will be written to
 func (cdbm *CDBM) createLogsDirectory() (*os.File, error) {
-	var err error
-
-	logDir := cdbm.MigrateFlags.MigrationsDir + "logs/"
-
-	if err = os.MkdirAll(logDir, os.ModePerm); err != nil {
-		return nil, errors.WithStack(err)
+	if _, err := os.Stat(cdbm.LogFlags.LogFile); errors.Is(err, os.ErrNotExist) {
+		if cdbm.LogFlags.LogFile != "" {
+			return os.Create(cdbm.LogFlags.LogFile)
+		} else {
+			return nil, nil
+		}
 	}
 
-	return os.OpenFile(logDir+"logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	return os.Open(cdbm.LogFlags.LogFile)
 }
 
 // verifyFilesAndMigrations loops through given migration files and
@@ -372,13 +312,13 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		fileNameSlice := strings.Split(v.Name(), "_")
 
 		if len(fileNameSlice) == 1 {
-			return nil, errors.WithStack(ErrInvalidFileName)
+			return nil, errors.WithStack(cdbmutil.ErrInvalidFileName)
 		}
 
 		version, err := strconv.Atoi(fileNameSlice[0])
 
 		if err != nil {
-			return nil, errors.WithStack(ErrInvalidFileName)
+			return nil, errors.WithStack(cdbmutil.ErrInvalidFileName)
 		}
 
 		// Migrations should not be lower than 1
@@ -391,15 +331,15 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		bodySlice := strings.Split(fileNameSlice[1], ".")
 
 		if len(bodySlice) != 3 {
-			return nil, errors.WithStack(ErrInvalidFileName)
+			return nil, errors.WithStack(cdbmutil.ErrInvalidFileName)
 		}
 
 		if bodySlice[1] != "up" && bodySlice[1] != "down" {
-			return nil, errors.WithStack(ErrInvalidFileName)
+			return nil, errors.WithStack(cdbmutil.ErrInvalidFileName)
 		}
 
 		if bodySlice[2] != "sql" {
-			return nil, errors.WithStack(ErrInvalidFileName)
+			return nil, errors.WithStack(cdbmutil.ErrInvalidFileName)
 		}
 
 		_, ok := fileVersions[version]
@@ -583,7 +523,7 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 						query,
 						version,
 						true,
-						MigrateTypeDown,
+						cdbmutil.MigrateTypeDown,
 						true,
 					); err != nil {
 						cdbm.migrateCfg.LogWriter(err)
@@ -599,7 +539,7 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 			if err = cdbm.migrateCfg.FileMigration(
 				cdbm.migrateCfg.Migrate,
 				version,
-				MigrateTypeDown,
+				cdbmutil.MigrateTypeDown,
 			); err != nil {
 				cdbm.migrateCfg.LogWriter(err)
 
@@ -607,7 +547,7 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 					cdbm.migrateCfg.UpdateQuery,
 					version,
 					true,
-					MigrateTypeDown,
+					cdbmutil.MigrateTypeDown,
 					false,
 				); err != nil {
 					cdbm.migrateCfg.LogWriter(err)
@@ -627,7 +567,7 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 }
 
 // applyCustomMigration applies custom migration to database
-func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) error {
+func (cdbm *CDBM) applyCustomMigration(version int, cmFunc cdbmutil.CustomMigrationFunc) error {
 	var err, innerErr error
 
 	if err = cmFunc(cdbm.DB); err != nil {
@@ -635,7 +575,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 
 		var errMsg string
 
-		if cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+		if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 			errMsg = "failed on custom up migration for version: '%d'"
 		} else {
 			errMsg = "failed on custom down migration for version: '%d'"
@@ -652,7 +592,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 		}
 
 		if cdbm.MigrateFlags.RollbackOnFailure &&
-			cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+			cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 
 			if innerErr = cdbm.migrationRollbackFail(version); innerErr != nil {
 				return fmt.Errorf(err.Error() + " and " + innerErr.Error())
@@ -689,7 +629,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 
 	isCustom := true
 
-	if cdbm.migrateCfg.MigrateType == MigrateTypeDown {
+	if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeDown {
 		version--
 
 		if _, ok := cdbm.migrateCfg.CustomMigrations[version]; !ok {
@@ -730,11 +670,11 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc CustomMigrationFunc) 
 func (cdbm *CDBM) applyFileMigration(version int) error {
 	var err, innerErr error
 
-	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty && cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty && cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 		if err = cdbm.migrateCfg.FileMigration(
 			cdbm.migrateCfg.Migrate,
 			version,
-			MigrateTypeDown,
+			cdbmutil.MigrateTypeDown,
 		); err != nil && !cdbm.MigrateFlags.SkipFileMigrationResetOnFailure {
 			cdbm.migrateCfg.LogWriter(err)
 
@@ -742,7 +682,7 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 				cdbm.migrateCfg.UpdateQuery,
 				version,
 				true,
-				MigrateTypeDown,
+				cdbmutil.MigrateTypeDown,
 				false,
 			); err != nil {
 				cdbm.migrateCfg.LogWriter(err)
@@ -763,7 +703,7 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 	); err != nil {
 		var errMsg string
 
-		if cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+		if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 			errMsg = "failed on file up migration for version: '%d'"
 		} else {
 			errMsg = "failed on file down migration for version: '%d'"
@@ -773,7 +713,7 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 		err = fmt.Errorf(errMsg, version)
 
 		if cdbm.MigrateFlags.RollbackOnFailure &&
-			cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+			cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 			if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty {
 				if _, innerErr = cdbm.DB.Exec(
 					cdbm.migrateCfg.UpdateQuery,
@@ -810,7 +750,7 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 	} else {
 		isCustom := false
 
-		if cdbm.migrateCfg.MigrateType == MigrateTypeDown {
+		if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeDown {
 			version--
 
 			if _, ok := cdbm.migrateCfg.CustomMigrations[version]; ok {
@@ -849,7 +789,7 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
 	fmt.Printf("apply migration version: %d\n", cfg.Version)
 
-	var cm CustomMigrationFunc
+	var cm cdbmutil.CustomMigrationFunc
 	var err error
 
 	isCustom := false
@@ -858,7 +798,7 @@ func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
 		isCustom = true
 	}
 
-	if cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+	if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 		cm = cfg.CustomMigration.Up
 	} else {
 		cm = cfg.CustomMigration.Down
@@ -883,7 +823,7 @@ func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
 func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 	var err error
 
-	if cdbm.migrateCfg.MigrateType == MigrateTypeUp {
+	if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 		for _, v := range cfgs {
 			if cdbm.migrateCfg.SchemaMigration.Dirty {
 				if v.Version < cdbm.migrateCfg.SchemaMigration.StartingVersion {
