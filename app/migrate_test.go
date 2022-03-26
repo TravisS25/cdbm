@@ -151,7 +151,7 @@ func TestCheckMigrationsProtocol(t *testing.T) {
 	}
 }
 
-func TestApplyQueries(t *testing.T) {
+func TestApplySchemaMigrationsQueries(t *testing.T) {
 	settings, err := cdbmutil.GetCDBMUtilSettings("")
 
 	if err != nil {
@@ -372,43 +372,6 @@ func TestVerifyFilesAndMigrations(t *testing.T) {
 		t.Errorf("should have error")
 	} else if err == cdbmutil.ErrInvalidFileName {
 		t.Errorf("should have version error; got %s\n", err.Error())
-	}
-
-	// --------------------------------------------------------------------------
-
-	if err = os.RemoveAll(migrationsDir); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = os.MkdirAll(migrationsDir, os.ModePerm); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if _, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	// Should error out due to duplicate version names between sql files
-	// and custom migrations
-	mApp = &CDBM{
-		MigrateFlags: MigrateFlagsConfig{
-			MigrationsDir: migrationsDir,
-		},
-		migrateCfg: migrateState{
-			CustomMigrations: map[int]cdbmutil.CustomMigration{
-				2: {
-					Up: func(db webutil.DBInterface) error {
-						return nil
-					},
-				},
-			},
-		},
-	}
-
-	if _, err = mApp.verifyFilesAndMigrations(); err == nil {
-		t.Errorf("should have error")
-	} else if !strings.Contains(err.Error(), "following custom versions are out of range from files") {
-		t.Errorf("should have out of range error; got %s\n", err.Error())
 	}
 
 	// --------------------------------------------------------------------------
@@ -739,7 +702,7 @@ func TestMigrationRollbackFail(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	// Validating custom down migration error
+	// Validating custom down migration error with having rows in schema_migrations table
 	mApp = &CDBM{
 		DB: db,
 		MigrateFlags: MigrateFlagsConfig{
@@ -765,7 +728,61 @@ func TestMigrationRollbackFail(t *testing.T) {
 			},
 			SchemaMigration: schemaMigration{
 				SchemaCfg: schemaConfig{
-					HasEntry: true,
+					NoRows: false,
+				},
+			},
+		},
+	}
+
+	if err = mApp.migrationRollbackFail(2); err == nil {
+		t.Errorf("should have error")
+	} else if err.Error() != "failed on custom rollback migration for version: '2'" {
+		t.Errorf("should contain custom rollback migration error; got %s\n", err.Error())
+	}
+
+	if err = db.QueryRowx("select version from schema_migrations").Scan(&version); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if version != 2 {
+		t.Errorf("should have version 2; got %s\n", err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	deleteFromSchemaMigration(t, db)
+
+	if _, err = db.Exec(insertQuery, 3, false, "", false); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Validating custom down migration error with having no rows in schema_migrations table
+	mApp = &CDBM{
+		DB: db,
+		MigrateFlags: MigrateFlagsConfig{
+			RollbackOnFailure: true,
+		},
+		migrateCfg: migrateState{
+			InsertQuery: insertQuery,
+			UpdateQuery: updateQuery,
+			MigrateType: cdbmutil.MigrateTypeUp,
+			LogWriter: func(err error) {
+				if err == nil {
+					t.Errorf("should have error for logger")
+				} else if err.Error() != "custom down migration error" {
+					t.Errorf("should have custom down migration error; got %s\n", err.Error())
+				}
+			},
+			CustomMigrations: map[int]cdbmutil.CustomMigration{
+				2: {
+					Down: func(db webutil.DBInterface) error {
+						return fmt.Errorf("custom down migration error")
+					},
+				},
+			},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					NoRows: true,
 				},
 			},
 		},
@@ -815,7 +832,7 @@ func TestMigrationRollbackFail(t *testing.T) {
 			},
 			SchemaMigration: schemaMigration{
 				SchemaCfg: schemaConfig{
-					HasEntry: true,
+					NoRows: false,
 				},
 			},
 		},
@@ -839,7 +856,11 @@ func TestMigrationRollbackFail(t *testing.T) {
 
 	deleteFromSchemaMigration(t, db)
 
-	// Should be valid
+	if _, err = db.Exec(insertQuery, 3, false, "", false); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Validating file down migration error with having rows in schema_migration table
 	mApp = &CDBM{
 		DB: db,
 		MigrateFlags: MigrateFlagsConfig{
@@ -857,11 +878,57 @@ func TestMigrationRollbackFail(t *testing.T) {
 				}
 			},
 			FileMigration: func(mig *migrate.Migrate, version int, mt cdbmutil.MigrationsType) error {
+				return fmt.Errorf("file down migration error")
+			},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					NoRows: true,
+				},
+			},
+		},
+	}
+
+	if err = mApp.migrationRollbackFail(2); err == nil {
+		t.Errorf("should have error")
+	} else if err.Error() != "failed on file rollback migration for version: '2'" {
+		t.Errorf("should contain file rollback migration error; got %s\n", err.Error())
+	}
+
+	if err = db.QueryRowx("select version from schema_migrations").Scan(&version); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if version != 2 {
+		t.Errorf("should have version 2; got %s\n", err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	deleteFromSchemaMigration(t, db)
+
+	// Should be valid with no rows
+	mApp = &CDBM{
+		DB: db,
+		MigrateFlags: MigrateFlagsConfig{
+			RollbackOnFailure: true,
+		},
+		migrateCfg: migrateState{
+			InsertQuery: insertQuery,
+			UpdateQuery: updateQuery,
+			MigrateType: cdbmutil.MigrateTypeDown,
+			LogWriter: func(err error) {
+				if err == nil {
+					t.Errorf("should have error for logger")
+				} else if err.Error() != "file down migration error" {
+					t.Errorf("should have file down migration error; got %s\n", err.Error())
+				}
+			},
+			FileMigration: func(mig *migrate.Migrate, version int, mt cdbmutil.MigrationsType) error {
 				return nil
 			},
 			SchemaMigration: schemaMigration{
 				SchemaCfg: schemaConfig{
-					HasEntry: true,
+					NoRows: true,
 				},
 			},
 		},
@@ -902,7 +969,7 @@ func TestApplyCustomMigration(t *testing.T) {
 	insertQuery := getSchemaInsert(t, settings.BaseDatabaseSettings.DatabaseProtocol)
 	updateQuery := getSchemaUpdate(t, settings.BaseDatabaseSettings.DatabaseProtocol)
 
-	var sm schemaMigration
+	//var sm schemaMigration
 	var cm cdbmutil.CustomMigration
 
 	// --------------------------------------------------------------------------
@@ -913,6 +980,7 @@ func TestApplyCustomMigration(t *testing.T) {
 		migrateCfg: migrateState{
 			MigrateType: cdbmutil.MigrateTypeUp,
 			InsertQuery: insertQuery,
+			UpdateQuery: updateQuery,
 			LogWriter:   func(err error) {},
 		},
 	}
@@ -926,8 +994,39 @@ func TestApplyCustomMigration(t *testing.T) {
 		t.Errorf("should not have error; got %s\n", err.Error())
 	}
 
-	if !mApp.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
-		t.Errorf("entry should have changed to true")
+	if mApp.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
+		t.Errorf("should have rows")
+	}
+
+	// --------------------------------------------------------------------------
+
+	// Validating successful custom up migration with no rows in schema_migration table
+	mApp = &CDBM{
+		DB: db,
+		migrateCfg: migrateState{
+			MigrateType: cdbmutil.MigrateTypeUp,
+			InsertQuery: insertQuery,
+			UpdateQuery: updateQuery,
+			LogWriter:   func(err error) {},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					NoRows: true,
+				},
+			},
+		},
+	}
+
+	if err = mApp.applyCustomMigration(
+		2,
+		func(db webutil.DBInterface) error {
+			return nil
+		},
+	); err != nil {
+		t.Errorf("should not have error; got %s\n", err.Error())
+	}
+
+	if mApp.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
+		t.Errorf("should have rows")
 	}
 
 	// --------------------------------------------------------------------------
@@ -939,6 +1038,7 @@ func TestApplyCustomMigration(t *testing.T) {
 		migrateCfg: migrateState{
 			MigrateType: cdbmutil.MigrateTypeDown,
 			InsertQuery: insertQuery,
+			UpdateQuery: updateQuery,
 			LogWriter:   func(err error) {},
 		},
 	}
@@ -953,40 +1053,8 @@ func TestApplyCustomMigration(t *testing.T) {
 		t.Errorf("should not have error; got %s\n", err.Error())
 	}
 
-	if !mApp.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
-		t.Errorf("entry should have changed to true")
-	}
-
-	// --------------------------------------------------------------------------
-
-	deleteFromSchemaMigration(t, db)
-
-	if _, err = db.Exec(insertQuery, 1, false, "", false); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	// Validating custom up migration with schema entry already in db
-	mApp = &CDBM{
-		DB: db,
-		migrateCfg: migrateState{
-			MigrateType: cdbmutil.MigrateTypeUp,
-			UpdateQuery: updateQuery,
-			LogWriter:   func(err error) {},
-			SchemaMigration: schemaMigration{
-				SchemaCfg: schemaConfig{
-					HasEntry: true,
-				},
-			},
-		},
-	}
-
-	if err = mApp.applyCustomMigration(
-		2,
-		func(db webutil.DBInterface) error {
-			return nil
-		},
-	); err != nil {
-		t.Errorf("should not have error; got %s\n", err.Error())
+	if mApp.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
+		t.Errorf("should have rows")
 	}
 
 	// --------------------------------------------------------------------------
@@ -1015,18 +1083,35 @@ func TestApplyCustomMigration(t *testing.T) {
 		t.Errorf("should have custom up migration error; got %s\n", err.Error())
 	}
 
-	sm = getSchemaMigration(t, db)
+	// --------------------------------------------------------------------------
 
-	if sm.StartingVersion != 2 {
-		t.Errorf("version should be 2; got %d\n", sm.StartingVersion)
+	deleteFromSchemaMigration(t, db)
+
+	// Validating custom up migration error with no rows in schema_migrations table
+	mApp = &CDBM{
+		DB: db,
+		migrateCfg: migrateState{
+			InsertQuery: insertQuery,
+			UpdateQuery: updateQuery,
+			MigrateType: cdbmutil.MigrateTypeUp,
+			LogWriter:   func(err error) {},
+			SchemaMigration: schemaMigration{
+				SchemaCfg: schemaConfig{
+					NoRows: true,
+				},
+			},
+		},
 	}
-	if !sm.Dirty {
-		t.Errorf("should be dirty")
-	}
-	if sm.DirtyState == nil {
-		t.Errorf("should have dirty state")
-	} else if *sm.DirtyState != string(cdbmutil.MigrateTypeUp) {
-		t.Errorf("should have dirty state 'Up'; got %s\n", *sm.DirtyState)
+
+	if err = mApp.applyCustomMigration(
+		2,
+		func(db webutil.DBInterface) error {
+			return fmt.Errorf("custom migration error")
+		},
+	); err == nil {
+		t.Errorf("should have error")
+	} else if err.Error() != "failed on custom up migration for version: '2'" {
+		t.Errorf("should have custom up migration error; got %s\n", err.Error())
 	}
 
 	// --------------------------------------------------------------------------
@@ -1070,20 +1155,6 @@ func TestApplyCustomMigration(t *testing.T) {
 		}
 	}
 
-	sm = getSchemaMigration(t, db)
-
-	if sm.StartingVersion != 1 {
-		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
-	}
-	if sm.Dirty {
-		t.Errorf("should not be dirty")
-	}
-	if sm.DirtyState == nil {
-		t.Errorf("should have dirty state")
-	} else if *sm.DirtyState != "" {
-		t.Errorf("should have no dirty state; got %s\n", *sm.DirtyState)
-	}
-
 	// --------------------------------------------------------------------------
 
 	deleteFromSchemaMigration(t, db)
@@ -1111,9 +1182,6 @@ func TestApplyCustomMigration(t *testing.T) {
 			CustomMigrations: map[int]cdbmutil.CustomMigration{
 				2: cm,
 			},
-			// FileMigration: func(mig *migrate.Migrate, version int, mt cdbmutil.MigrationsType) error {
-			// 	return nil
-			// },
 			SchemaMigration: schemaMigration{
 				StartingVersion: 1,
 			},
@@ -1126,20 +1194,6 @@ func TestApplyCustomMigration(t *testing.T) {
 		if !strings.Contains(err.Error(), "failed on custom rollback migration for version: '2'") {
 			t.Errorf("should have failed rollback; got %s\n", err.Error())
 		}
-	}
-
-	sm = getSchemaMigration(t, db)
-
-	if sm.StartingVersion != 2 {
-		t.Errorf("version should be 2; got %d\n", sm.StartingVersion)
-	}
-	if !sm.Dirty {
-		t.Errorf("should be dirty")
-	}
-	if sm.DirtyState == nil {
-		t.Errorf("should have dirty state")
-	} else if *sm.DirtyState != string(cdbmutil.MigrateTypeDown) {
-		t.Errorf("should have dirty state 'Down'; got %s\n", *sm.DirtyState)
 	}
 
 	// --------------------------------------------------------------------------
@@ -1156,7 +1210,7 @@ func TestApplyCustomMigration(t *testing.T) {
 			LogWriter:   func(err error) {},
 			SchemaMigration: schemaMigration{
 				SchemaCfg: schemaConfig{
-					HasEntry: true,
+					NoRows: false,
 				},
 			},
 		},
@@ -1638,7 +1692,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 		DirtyState:        &emptyStr,
 		IsCustomMigration: false,
 		SchemaCfg: schemaConfig{
-			HasEntry: true,
+			NoRows: false,
 		},
 	}
 
@@ -1710,7 +1764,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 		DirtyState:        &emptyStr,
 		IsCustomMigration: true,
 		SchemaCfg: schemaConfig{
-			HasEntry: true,
+			NoRows: false,
 		},
 	}
 
@@ -1778,7 +1832,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 		DirtyState:        &emptyStr,
 		IsCustomMigration: true,
 		SchemaCfg: schemaConfig{
-			HasEntry: true,
+			NoRows: false,
 		},
 	}
 
@@ -1840,7 +1894,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 		DirtyState:        &emptyStr,
 		IsCustomMigration: false,
 		SchemaCfg: schemaConfig{
-			HasEntry: true,
+			NoRows: false,
 		},
 	}
 
@@ -1913,7 +1967,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 		DirtyState:        &emptyStr,
 		IsCustomMigration: true,
 		SchemaCfg: schemaConfig{
-			HasEntry: true,
+			NoRows: false,
 		},
 	}
 
@@ -1974,6 +2028,184 @@ func TestRunMigrationConfigs(t *testing.T) {
 	if sm.StartingVersion != 1 {
 		t.Errorf("file version should be 1; got %d\n", sm.StartingVersion)
 	}
+}
+
+func TestFoor(t *testing.T) {
+	var err error
+	var mApp *CDBM
+
+	settings, err := cdbmutil.GetCDBMUtilSettings("")
+
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	settings.DBSetup.FileServerSetup = nil
+	settings.DBSetup.BaseSchemaFile = ""
+
+	db, dbName, err := cdbmutil.GetNewDatabase(
+		settings,
+		cdbmutil.DefaultExecCmd,
+		cdbmutil.DefaultGetDB,
+	)
+
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	dbProtocolCfg := cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(settings.BaseDatabaseSettings.DatabaseProtocol)]
+
+	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
+	defer dropCmd.Start()
+
+	createMigrationTable(t, db)
+	insertQuery := getSchemaInsert(t, settings.BaseDatabaseSettings.DatabaseProtocol)
+	updateQuery := getSchemaUpdate(t, settings.BaseDatabaseSettings.DatabaseProtocol)
+	emptyStr := ""
+
+	var sm schemaMigration
+	//var version2Called bool
+
+	sm = schemaMigration{
+		StartingVersion:   3,
+		Dirty:             false,
+		DirtyState:        &emptyStr,
+		IsCustomMigration: false,
+		SchemaCfg: schemaConfig{
+			NoRows: false,
+		},
+	}
+
+	if _, err = db.Exec(
+		insertQuery,
+		sm.StartingVersion,
+		sm.Dirty,
+		sm.DirtyState,
+		sm.IsCustomMigration,
+	); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	mApp = &CDBM{
+		DB:            db,
+		DBProtocolCfg: dbProtocolCfg,
+		migrateCfg: migrateState{
+			TargetVersion:   2,
+			LogWriter:       func(err error) {},
+			MigrateType:     cdbmutil.MigrateTypeDown,
+			InsertQuery:     insertQuery,
+			UpdateQuery:     updateQuery,
+			SchemaMigration: sm,
+			FileMigration: func(mig *migrate.Migrate, version int, mt cdbmutil.MigrationsType) error {
+				fmt.Printf("version: %d\n", version)
+				_, innerErr := db.Exec(updateQuery, version-1, false, "", false)
+				return innerErr
+			},
+		},
+	}
+
+	//version2Called = false
+
+	// Validating a normal file down migration
+	if err = mApp.runMigrationConfigs(
+		[]migrationApplyConfig{
+			{
+				Version: 1,
+			},
+			{
+				Version: 2,
+				CustomMigration: cdbmutil.CustomMigration{
+					Up: func(db webutil.DBInterface) error {
+						t.Errorf("should not be called")
+						return nil
+					},
+				},
+			},
+			{
+				Version: 3,
+			},
+		},
+	); err != nil {
+		t.Errorf("should not have error; got %s\n", err.Error())
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 2 {
+		t.Errorf("file version should be 2; got %d\n", sm.StartingVersion)
+	}
+
+	// --------------------------------------------------------------------------
+
+	// deleteFromSchemaMigration(t, db)
+
+	// sm = schemaMigration{
+	// 	StartingVersion:   2,
+	// 	Dirty:             true,
+	// 	DirtyState:        &emptyStr,
+	// 	IsCustomMigration: true,
+	// 	SchemaCfg: schemaConfig{
+	// 		NoRows: false,
+	// 	},
+	// }
+
+	// if _, err = db.Exec(
+	// 	insertQuery,
+	// 	sm.StartingVersion,
+	// 	sm.Dirty,
+	// 	sm.DirtyState,
+	// 	sm.IsCustomMigration,
+	// ); err != nil {
+	// 	t.Fatalf(err.Error())
+	// }
+
+	// mApp = &CDBM{
+	// 	DB:            db,
+	// 	DBProtocolCfg: dbProtocolCfg,
+	// 	migrateCfg: migrateState{
+	// 		TargetVersion:   1,
+	// 		LogWriter:       func(err error) {},
+	// 		MigrateType:     cdbmutil.MigrateTypeDown,
+	// 		InsertQuery:     insertQuery,
+	// 		UpdateQuery:     updateQuery,
+	// 		SchemaMigration: sm,
+	// 	},
+	// }
+
+	// version2Called = false
+
+	// // Validating a normal custom down migration which is dirty
+	// if err = mApp.runMigrationConfigs(
+	// 	[]migrationApplyConfig{
+	// 		{
+	// 			Version: 1,
+	// 		},
+	// 		{
+	// 			Version: 2,
+	// 			CustomMigration: cdbmutil.CustomMigration{
+	// 				Down: func(db webutil.DBInterface) error {
+	// 					version2Called = true
+	// 					return nil
+	// 				},
+	// 			},
+	// 		},
+	// 		{
+	// 			Version: 3,
+	// 		},
+	// 	},
+	// ); err != nil {
+	// 	t.Errorf("should not have error; got %s\n", err.Error())
+	// }
+
+	// if !version2Called {
+	// 	t.Errorf("version 2 should have been called")
+	// }
+
+	// sm = getSchemaMigration(t, db)
+
+	// if sm.StartingVersion != 1 {
+	// 	t.Errorf("file version should be 1; got %d\n", sm.StartingVersion)
+	// }
 }
 
 func TestSuccessfulMigrate(t *testing.T) {

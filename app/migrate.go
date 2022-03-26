@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -177,12 +178,6 @@ func (cdbm *CDBM) Migrate(
 			cdbm.migrateCfg.MigrateType = cdbmutil.MigrateTypeDown
 		}
 
-		cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry = true
-
-		if cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
-			cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry = false
-		}
-
 		if err = cdbm.runMigrationConfigs(migrationApplyCfgs); err != nil {
 			return err
 		}
@@ -279,7 +274,13 @@ func (cdbm *CDBM) applySchemaMigrationsQueries() error {
 func (cdbm *CDBM) createLogsDirectory() (*os.File, error) {
 	if _, err := os.Stat(cdbm.LogFlags.LogFile); errors.Is(err, os.ErrNotExist) {
 		if cdbm.LogFlags.LogFile != "" {
-			return os.Create(cdbm.LogFlags.LogFile)
+			baseDir, fileName := path.Split(cdbm.LogFlags.LogFile)
+
+			if err = os.MkdirAll(baseDir, os.ModePerm); err != nil {
+				return nil, errors.WithStack(err)
+			}
+
+			return os.Create(baseDir + fileName)
 		} else {
 			return nil, nil
 		}
@@ -304,17 +305,20 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 	migrationApplyCfgs := make([]migrationApplyConfig, 0)
 
 	// Loop through files and make sure they follow naming convention
-	for _, v := range files {
-		if v.IsDir() {
+	for _, file := range files {
+		// If current file is directory, continue loop as we are only looking
+		// for files in migrations direcroty
+		if file.IsDir() {
 			continue
 		}
 
-		fileNameSlice := strings.Split(v.Name(), "_")
+		fileNameSlice := strings.Split(file.Name(), "_")
 
 		if len(fileNameSlice) == 1 {
 			return nil, errors.WithStack(cdbmutil.ErrInvalidFileName)
 		}
 
+		// File names should be numbers
 		version, err := strconv.Atoi(fileNameSlice[0])
 
 		if err != nil {
@@ -345,6 +349,8 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		_, ok := fileVersions[version]
 		_, customOK := cdbm.migrateCfg.CustomMigrations[version]
 
+		// If current version is not found in either file migrations or custom migrations,
+		// add it to our migration apply config slice
 		if !ok && !customOK {
 			migrationApplyCfgs = append(
 				migrationApplyCfgs,
@@ -357,15 +363,9 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 		fileVersions[version] = true
 	}
 
-	invalidCustomVersions := make([]int, 0)
-
 	// Loop through custom migrations to make sure there are no duplicate
 	// versions between files and custom migrations
 	for k, v := range cdbm.migrateCfg.CustomMigrations {
-		if _, ok := fileVersions[k]; !ok {
-			invalidCustomVersions = append(invalidCustomVersions, k)
-		}
-
 		mac := migrationApplyConfig{
 			Version:         k,
 			CustomMigration: v,
@@ -376,15 +376,6 @@ func (cdbm *CDBM) verifyFilesAndMigrations() ([]migrationApplyConfig, error) {
 
 	if len(migrationApplyCfgs) == 0 {
 		return nil, fmt.Errorf("no sql files or custom migrations found")
-	}
-
-	if len(invalidCustomVersions) > 0 {
-		return nil, errors.WithStack(
-			fmt.Errorf(
-				"following custom versions are out of range from files: %v",
-				invalidCustomVersions,
-			),
-		)
 	}
 
 	// Sort migrationApplyCfgs by version so migrations can happen in order
@@ -472,6 +463,7 @@ func (cdbm *CDBM) resetDirtyFlag() error {
 
 	if cdbm.migrateCfg.SchemaMigration.Dirty {
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty = true
+
 		if cdbm.MigrateFlags.ResetDirtyFlag {
 			if _, err = cdbm.DB.Exec(
 				cdbm.migrateCfg.UpdateQuery,
@@ -500,7 +492,6 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 	var err error
 
 	for version > cdbm.migrateCfg.SchemaMigration.StartingVersion {
-		//fmt.Printf("current version: %d\n", version)
 		// Check if current version is apart of a custom migration
 		//
 		// If it is, apply down migration of version if func is not nil
@@ -513,7 +504,7 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 
 					var query string
 
-					if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
+					if cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
 						query = cdbm.migrateCfg.InsertQuery
 					} else {
 						query = cdbm.migrateCfg.UpdateQuery
@@ -585,10 +576,10 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc cdbmutil.CustomMigrat
 
 		// If schema_migrations table already had entry, use update query
 		// Else use create query
-		if cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
-			query = cdbm.migrateCfg.UpdateQuery
-		} else {
+		if cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
 			query = cdbm.migrateCfg.InsertQuery
+		} else {
+			query = cdbm.migrateCfg.UpdateQuery
 		}
 
 		// If failing on up migration and the --rollback-on-failure flag is set,
@@ -632,7 +623,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc cdbmutil.CustomMigrat
 		return err
 	}
 
-	if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
+	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows {
 		if _, err = cdbm.DB.Exec(
 			cdbm.migrateCfg.InsertQuery,
 			version,
@@ -644,7 +635,7 @@ func (cdbm *CDBM) applyCustomMigration(version int, cmFunc cdbmutil.CustomMigrat
 			return errors.WithStack(err)
 		}
 
-		cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry = true
+		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows = false
 	} else {
 		if _, err = cdbm.DB.Exec(
 			cdbm.migrateCfg.UpdateQuery,
@@ -752,18 +743,8 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 			cdbm.migrateCfg.LogWriter(err)
 			return errors.WithStack(err)
 		}
-	}
 
-	if !cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry {
-		sm, err := cdbm.getSchemaMigration()
-
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		if !sm.SchemaCfg.NoRows {
-			cdbm.migrateCfg.SchemaMigration.SchemaCfg.HasEntry = true
-		}
+		fmt.Printf("file version: %d\n", version)
 	}
 
 	return nil
@@ -771,16 +752,8 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 
 // applyMigrationConfig will apply given migrationApplyConfig to database
 func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
-	fmt.Printf("apply migration version: %d\n", cfg.Version)
-
 	var cm cdbmutil.CustomMigrationFunc
 	var err error
-
-	isCustom := false
-
-	if cfg.CustomMigration.Up != nil || cfg.CustomMigration.Down != nil {
-		isCustom = true
-	}
 
 	if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 		cm = cfg.CustomMigration.Up
@@ -788,11 +761,9 @@ func (cdbm *CDBM) applyMigrationConfig(cfg migrationApplyConfig) error {
 		cm = cfg.CustomMigration.Down
 	}
 
-	if isCustom {
-		if cm != nil {
-			if err = cdbm.applyCustomMigration(cfg.Version, cm); err != nil {
-				return err
-			}
+	if cm != nil {
+		if err = cdbm.applyCustomMigration(cfg.Version, cm); err != nil {
+			return err
 		}
 	} else {
 		if err = cdbm.applyFileMigration(cfg.Version); err != nil {
@@ -808,22 +779,16 @@ func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 	var err error
 
 	if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
-		for _, v := range cfgs {
-			if cdbm.migrateCfg.SchemaMigration.Dirty {
-				if v.Version < cdbm.migrateCfg.SchemaMigration.StartingVersion {
-					continue
-				}
-			} else {
-				if v.Version <= cdbm.migrateCfg.SchemaMigration.StartingVersion {
-					continue
-				}
+		for _, cfg := range cfgs {
+			if cfg.Version < cdbm.migrateCfg.SchemaMigration.StartingVersion {
+				continue
 			}
 
-			if cdbm.migrateCfg.TargetVersion < v.Version {
+			if cdbm.migrateCfg.TargetVersion < cfg.Version {
 				break
 			}
 
-			if err = cdbm.applyMigrationConfig(v); err != nil {
+			if err = cdbm.applyMigrationConfig(cfg); err != nil {
 				return err
 			}
 		}

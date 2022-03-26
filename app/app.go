@@ -274,7 +274,7 @@ type schemaConfig struct {
 	NoRows bool
 
 	// HasEntry determines if there are any entries in the schema_migrations table
-	HasEntry bool
+	//HasEntry bool
 
 	// Dirty determines if schema_migrations table is dirty
 	Dirty bool
