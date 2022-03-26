@@ -3055,36 +3055,27 @@ func TestRollbackMigrate(t *testing.T) {
 }
 
 func TestMigrateItself(t *testing.T) {
-	var err error
-	var mApp *CDBM
-
-	settings, err := cdbmutil.GetCDBMUtilSettings("")
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	dbProtocolCfg := cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(settings.BaseDatabaseSettings.DatabaseProtocol)]
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	settings.DBSetup.FileServerSetup = nil
-	settings.DBSetup.BaseSchemaFile = ""
-
-	db, dbName, err := cdbmutil.GetNewDatabase(
-		settings,
+	returnCfg, err := cdbmutil.GetMigrationSetupTeardown(
+		"",
 		cdbmutil.DefaultExecCmd,
 		cdbmutil.DefaultGetDB,
+		[]string{},
 	)
 
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
+	defer returnCfg.TearDown()
 
-	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
-	defer dropCmd.Start()
+	mApp, err := NewCDBM(RootFlagsConfig{
+		User:       returnCfg.Settings.BaseDatabaseSettings.Settings.User,
+		Host:       returnCfg.Settings.BaseDatabaseSettings.Settings.Host,
+		Port:       returnCfg.Settings.BaseDatabaseSettings.Settings.Port,
+		Database:   returnCfg.Settings.BaseDatabaseSettings.Settings.DBName,
+		DBProtocol: returnCfg.Settings.BaseDatabaseSettings.DatabaseProtocol,
+		SSLMode:    returnCfg.Settings.BaseDatabaseSettings.Settings.SSLMode,
+	}, nil)
+
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
 
 	migrationsDir := "/tmp/migrate-integration/"
 	defer os.RemoveAll(migrationsDir)
@@ -3143,42 +3134,9 @@ func TestMigrateItself(t *testing.T) {
 
 	// -----------------------------------------------------------------
 
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		MigrateFlags: MigrateFlagsConfig{
-			TargetVersion:      1,
-			MigrationsProtocol: cdbmutil.FileProtocol,
-			MigrationsDir:      migrationsDir,
-		},
-	}
+	mApp.MigrateFlags.MigrationsDir = migrationsDir
 
-	mApp.getSchemaMigration()
-	mig, err := cdbmutil.DefaultGetMigrationFunc(string(cdbmutil.FileProtocol)+migrationsDir, db.DB, dbProtocolCfg)
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = mig.Steps(1); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	sm := getSchemaMigration(t, db)
-
-	if sm.StartingVersion != 1 {
-		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
-	}
-
-	if err = mig.Steps(-1); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	var filler interface{}
-
-	if err = db.QueryRowx("select version from schema_migrations").Scan(&filler); err == nil {
-		t.Errorf("should have error")
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf(err.Error())
+	if err = mApp.Migrate(cdbmutil.DefaultGetMigrationFunc, cdbmutil.DefaultFileMigrationFunc, nil); err != nil {
+		t.Errorf("%+v", err)
 	}
 }

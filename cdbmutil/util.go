@@ -93,8 +93,6 @@ func GetNewDatabase(
 	if testSettings.DBSetup.FileServerSetup != nil {
 		fs := http.FileServer(http.Dir(testSettings.DBSetup.FileServerSetup.BaseSchemaDir))
 
-		fmt.Printf("dir: %s\n", testSettings.DBSetup.FileServerSetup.BaseSchemaDir)
-
 		go func() {
 			http.ListenAndServe(testSettings.DBSetup.FileServerSetup.FileServerURL, fs)
 		}()
@@ -116,8 +114,6 @@ func GetNewDatabase(
 				),
 			)
 			importCmd.Stderr = stdErr
-
-			fmt.Printf("importcmd: %s\n", importCmd)
 
 			if hasError(cmdFunc(importCmd)) {
 				return nil, "", errors.WithStack(fmt.Errorf(stdErr.String()))
@@ -176,6 +172,8 @@ func GetMigrationSetupTeardown(
 	if err != nil {
 		return MigrationSetupTeardownReturn{}, errors.WithStack(err)
 	}
+
+	utilSettings.BaseDatabaseSettings.Settings.DBName = dbName
 
 	dropDB := func() {
 		dropCmd := exec.Command(
