@@ -28,6 +28,7 @@ type migrateNameConfig struct {
 	RollbackOnFailure  flagName
 	LogFile            flagName
 	MigrationsProtocol flagName
+	MigrateDownOnDirty flagName
 }
 
 var migrateNameCfg = migrateNameConfig{
@@ -51,6 +52,10 @@ var migrateNameCfg = migrateNameConfig{
 		LongHand:  "migrations-protocol",
 		ShortHand: "p",
 	},
+	MigrateDownOnDirty: flagName{
+		LongHand:  "migrate-down-on-dirty",
+		ShortHand: "",
+	},
 }
 
 // migrateCmd represents the migrate command
@@ -68,21 +73,17 @@ var migrateCmd = &cobra.Command{
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		targetVersion, _ := cmd.Flags().GetInt(migrateNameCfg.TargetVersion.LongHand)
 		migrationDir, _ := cmd.Flags().GetString(migrateNameCfg.LogFile.LongHand)
-		rollbackOnFailure, _ := cmd.Flags().GetBool(migrateNameCfg.LogFile.LongHand)
-		resetDirtyFlag, _ := cmd.Flags().GetBool(migrateNameCfg.ResetDirtyFlag.LongHand)
 		migrationsProtocol, _ := cmd.Flags().GetString(migrateNameCfg.MigrationsProtocol.LongHand)
+
+		globalApp.MigrateFlags.RollbackOnFailure, _ = cmd.Flags().GetBool(migrateNameCfg.LogFile.LongHand)
+		globalApp.MigrateFlags.ResetDirtyFlag, _ = cmd.Flags().GetBool(migrateNameCfg.ResetDirtyFlag.LongHand)
+		globalApp.MigrateFlags.MigrateDownOnDirty, _ = cmd.Flags().GetBool(migrateNameCfg.MigrateDownOnDirty.LongHand)
 
 		if targetVersion != -1 {
 			globalApp.MigrateFlags.TargetVersion = targetVersion
 		}
 		if migrationDir != "" {
 			globalApp.MigrateFlags.MigrationsDir = migrationDir
-		}
-		if rollbackOnFailure {
-			globalApp.MigrateFlags.RollbackOnFailure = rollbackOnFailure
-		}
-		if resetDirtyFlag {
-			globalApp.MigrateFlags.ResetDirtyFlag = resetDirtyFlag
 		}
 		if migrationsProtocol != "" {
 			globalApp.MigrateFlags.MigrationsProtocol = cdbmutil.MigrationsProtocol(migrationsProtocol)
@@ -141,5 +142,10 @@ func init() {
 		false,
 		"When set will reset dirty flag when migrating",
 	)
-
+	migrateCmd.Flags().BoolP(
+		migrateNameCfg.MigrateDownOnDirty.LongHand,
+		migrateNameCfg.MigrateDownOnDirty.ShortHand,
+		false,
+		"When set will use the current down migration of file or custom migration if migration table is in dirty state",
+	)
 }
