@@ -77,7 +77,7 @@ var migrateCmd = &cobra.Command{
 
 		globalApp.MigrateFlags.RollbackOnFailure, _ = cmd.Flags().GetBool(migrateNameCfg.LogFile.LongHand)
 		globalApp.MigrateFlags.ResetDirtyFlag, _ = cmd.Flags().GetBool(migrateNameCfg.ResetDirtyFlag.LongHand)
-		globalApp.MigrateFlags.MigrateDownOnDirty, _ = cmd.Flags().GetBool(migrateNameCfg.MigrateDownOnDirty.LongHand)
+		//globalApp.MigrateFlags.MigrateDownIfDirty, _ = cmd.Flags().GetBool(migrateNameCfg.MigrateDownOnDirty.LongHand)
 
 		if targetVersion != -1 {
 			globalApp.MigrateFlags.TargetVersion = targetVersion

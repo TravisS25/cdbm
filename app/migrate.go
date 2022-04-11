@@ -14,6 +14,7 @@ import (
 
 	"github.com/TravisS25/cdbm/cdbmutil"
 	"github.com/TravisS25/webutil/webutil"
+	"github.com/TravisS25/webutil/webutilcfg"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/pkg/errors"
 )
@@ -41,7 +42,7 @@ type MigrateFlagsConfig struct {
 	// custom migration if the migrations's table is in a dirty state when trying to migrate up
 	//
 	// This is mostly used in conjunction with the --reset-dirty-flag option
-	MigrateDownIfDirty bool `yaml:"migrate_down_if_dirty" mapstructure:"migrate_down_if_dirty"`
+	//MigrateDownIfDirty bool `yaml:"migrate_down_if_dirty" mapstructure:"migrate_down_if_dirty"`
 
 	// SkipFileMigrationResetOnFailure is used to skip a migration reset for file migration if it fails
 	//
@@ -137,7 +138,7 @@ func (cdbm *CDBM) Migrate(
 		defer logWriter.Flush()
 
 		cdbm.migrateCfg.LogWriter = func(innerErr error) {
-			logWriter.WriteString(time.Now().UTC().Format(webutil.FormDateTimeLayout) + ": " + innerErr.Error() + "\n")
+			logWriter.WriteString(time.Now().UTC().Format(webutilcfg.FormDateTimeLayout) + ": " + innerErr.Error() + "\n")
 		}
 	}
 
@@ -174,7 +175,11 @@ func (cdbm *CDBM) Migrate(
 		return err
 	}
 
-	// If startingVersion != cdbm.migrateCfg.TargetVersion than we know user wants to migrate up or down
+	// fmt.Printf("dirty: %v\n", cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty)
+	// fmt.Printf("migrate type: %v\n", cdbm.migrateCfg.MigrateType)
+	// fmt.Printf("migrate if dirty: %v\n", cdbm.MigrateFlags.MigrateDownIfDirty)
+
+	// If startingVersion != targetVersion than we know user wants to migrate up or down
 	// or if schemaMigrations#NoRows is true than we know no migrations have been applied yet
 	if cdbm.migrateCfg.SchemaMigration.StartingVersion != cdbm.migrateCfg.TargetVersion ||
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows || cdbm.migrateCfg.SchemaMigration.Dirty {
@@ -508,7 +513,9 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 		if migration, ok := cdbm.migrateCfg.CustomMigrations[version]; ok {
 			if migration.Down != nil {
 				if err = migration.Down(cdbm.DB); err != nil {
-					cdbm.migrateCfg.LogWriter(err)
+					if cdbm.migrateCfg.LogWriter != nil {
+						cdbm.migrateCfg.LogWriter(err)
+					}
 
 					var query string
 
@@ -525,7 +532,9 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 						cdbmutil.MigrateTypeDown,
 						true,
 					); err != nil {
-						cdbm.migrateCfg.LogWriter(err)
+						if cdbm.migrateCfg.LogWriter != nil {
+							cdbm.migrateCfg.LogWriter(err)
+						}
 					}
 
 					return fmt.Errorf(
@@ -540,7 +549,9 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 				version,
 				cdbmutil.MigrateTypeDown,
 			); err != nil {
-				cdbm.migrateCfg.LogWriter(err)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 
 				if _, err = cdbm.DB.Exec(
 					cdbm.migrateCfg.UpdateQuery,
@@ -549,7 +560,9 @@ func (cdbm *CDBM) migrationRollbackFail(version int) error {
 					cdbmutil.MigrateTypeDown,
 					false,
 				); err != nil {
-					cdbm.migrateCfg.LogWriter(err)
+					if cdbm.migrateCfg.LogWriter != nil {
+						cdbm.migrateCfg.LogWriter(err)
+					}
 				}
 
 				return fmt.Errorf(
@@ -571,10 +584,11 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 
 	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty &&
 		cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp &&
-		cdbm.MigrateFlags.MigrateDownIfDirty &&
 		applyCfg.CustomMigration.Down != nil {
 		if err = applyCfg.CustomMigration.Down(cdbm.DB); err != nil {
-			cdbm.migrateCfg.LogWriter(err)
+			if cdbm.migrateCfg.LogWriter != nil {
+				cdbm.migrateCfg.LogWriter(err)
+			}
 
 			if _, err = cdbm.DB.Exec(
 				cdbm.migrateCfg.UpdateQuery,
@@ -583,7 +597,9 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 				cdbmutil.MigrateTypeDown,
 				false,
 			); err != nil {
-				cdbm.migrateCfg.LogWriter(err)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 			}
 
 			return errors.WithStack(
@@ -592,6 +608,7 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 		}
 
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty = false
+		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows = false
 	}
 
 	var cmFunc cdbmutil.CustomMigrationFunc
@@ -605,12 +622,14 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 	// If custom migration function has error, begin process of logging and trying
 	// to rollback migration if set
 	if err = cmFunc(cdbm.DB); err != nil {
-		cdbm.migrateCfg.LogWriter(err)
+		if cdbm.migrateCfg.LogWriter != nil {
+			cdbm.migrateCfg.LogWriter(err)
+		}
 
 		if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
-			err = fmt.Errorf("failed on custom up migration for version: '%d'", applyCfg.Version)
+			err = fmt.Errorf("failed on custom up migration for version: '%d'.  Error: %+v", applyCfg.Version, err)
 		} else {
-			err = fmt.Errorf("failed on custom down migration for version: '%d'", applyCfg.Version)
+			err = fmt.Errorf("failed on custom down migration for version: '%d'.  Error: %+v", applyCfg.Version, err)
 		}
 
 		var query string
@@ -631,7 +650,10 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 			// If error occurs during rollback, add to logger and return both
 			// migration and rollback errors
 			if innerErr = cdbm.migrationRollbackFail(applyCfg.Version); innerErr != nil {
-				cdbm.migrateCfg.LogWriter(innerErr)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
+
 				return fmt.Errorf(err.Error() + " and " + innerErr.Error())
 			}
 
@@ -642,7 +664,9 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 				"",
 				true,
 			); innerErr != nil {
-				cdbm.migrateCfg.LogWriter(innerErr)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 			}
 
 			return fmt.Errorf(
@@ -657,7 +681,9 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 				cdbm.migrateCfg.MigrateType,
 				true,
 			); innerErr != nil {
-				cdbm.migrateCfg.LogWriter(innerErr)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 			}
 		}
 
@@ -672,11 +698,12 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 			"",
 			true,
 		); err != nil {
-			cdbm.migrateCfg.LogWriter(err)
+			if cdbm.migrateCfg.LogWriter != nil {
+				cdbm.migrateCfg.LogWriter(err)
+			}
+
 			return errors.WithStack(err)
 		}
-
-		cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows = false
 	} else {
 		if _, err = cdbm.DB.Exec(
 			cdbm.migrateCfg.UpdateQuery,
@@ -685,10 +712,17 @@ func (cdbm *CDBM) applyCustomMigration(applyCfg migrationApplyConfig) error {
 			"",
 			true,
 		); err != nil {
-			cdbm.migrateCfg.LogWriter(err)
+			if cdbm.migrateCfg.LogWriter != nil {
+				cdbm.migrateCfg.LogWriter(err)
+			}
+
 			return errors.WithStack(err)
 		}
 	}
+
+	// At this point, no migration errors have occured and we know that at least
+	// onc migration has to occur so make NoRows = false
+	cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows = false
 
 	return nil
 }
@@ -698,14 +732,16 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 	var err, innerErr error
 
 	if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty &&
-		cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp &&
-		cdbm.MigrateFlags.MigrateDownIfDirty {
+		cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
+
 		if err = cdbm.migrateCfg.FileMigration(
 			cdbm.migrateCfg.Migrate,
 			version,
 			cdbmutil.MigrateTypeDown,
 		); err != nil {
-			cdbm.migrateCfg.LogWriter(err)
+			if cdbm.migrateCfg.LogWriter != nil {
+				cdbm.migrateCfg.LogWriter(err)
+			}
 
 			if _, err = cdbm.DB.Exec(
 				cdbm.migrateCfg.UpdateQuery,
@@ -714,13 +750,19 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 				cdbmutil.MigrateTypeDown,
 				false,
 			); err != nil {
-				cdbm.migrateCfg.LogWriter(err)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 			}
 
 			return errors.WithStack(
 				fmt.Errorf("failed of resetting file migration for version '%d'", version),
 			)
 		}
+
+		// For file migration, if down migration is successful to "undirty"
+		// migration state, then we must increase current version to then migrate up
+		version++
 
 		cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty = false
 	}
@@ -732,12 +774,14 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 		version,
 		cdbm.migrateCfg.MigrateType,
 	); err != nil {
-		cdbm.migrateCfg.LogWriter(err)
+		if cdbm.migrateCfg.LogWriter != nil {
+			cdbm.migrateCfg.LogWriter(err)
+		}
 
 		if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
-			err = fmt.Errorf("failed on file up migration for version: '%d'", version)
+			err = fmt.Errorf("failed on file up migration for version: '%d'.  Error: %+v\n", version, err)
 		} else {
-			err = fmt.Errorf("failed on file down migration for version: '%d'", version)
+			err = fmt.Errorf("failed on file down migration for version: '%d'.  Error: %+v\n", version, err)
 		}
 
 		// If failing on up migration and the --rollback-on-failure flag is set,
@@ -748,8 +792,11 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 			// If error occurs during rollback, add to logger and return both
 			// migration and rollback errors
 			if innerErr = cdbm.migrationRollbackFail(version); innerErr != nil {
-				cdbm.migrateCfg.LogWriter(innerErr)
-				return fmt.Errorf(err.Error() + " and " + innerErr.Error())
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
+
+				return fmt.Errorf(err.Error() + "\n" + innerErr.Error())
 			}
 
 			if _, innerErr = cdbm.DB.Exec(
@@ -759,7 +806,9 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 				"",
 				false,
 			); innerErr != nil {
-				cdbm.migrateCfg.LogWriter(innerErr)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 			}
 
 			return fmt.Errorf(
@@ -774,23 +823,34 @@ func (cdbm *CDBM) applyFileMigration(version int) error {
 				cdbm.migrateCfg.MigrateType,
 				false,
 			); innerErr != nil {
-				cdbm.migrateCfg.LogWriter(innerErr)
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
 			}
 		}
 
 		return err
 	} else {
-		if _, err = cdbm.DB.Exec(
-			cdbm.migrateCfg.UpdateQuery,
-			version,
-			false,
-			"",
-			false,
-		); err != nil {
-			cdbm.migrateCfg.LogWriter(err)
-			return errors.WithStack(err)
+		if cdbm.migrateCfg.MigrateType != cdbmutil.MigrateTypeDown && version != 0 {
+			if _, err = cdbm.DB.Exec(
+				cdbm.migrateCfg.UpdateQuery,
+				version,
+				false,
+				"",
+				false,
+			); err != nil {
+				if cdbm.migrateCfg.LogWriter != nil {
+					cdbm.migrateCfg.LogWriter(err)
+				}
+
+				return errors.WithStack(err)
+			}
 		}
 	}
+
+	// At this point, no migration errors have occured and we know that at least
+	// onc migration has to occur so make NoRows = false
+	cdbm.migrateCfg.SchemaMigration.SchemaCfg.NoRows = false
 
 	return nil
 }
@@ -800,6 +860,10 @@ func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 	var err error
 
 	applyMigration := func(cfg migrationApplyConfig) error {
+		// If CustomMigration functions are defined then we are currently on custom migration
+		// so apply custom migration of current version
+		//
+		// Else apply file migration
 		if cfg.CustomMigration.Up != nil || cfg.CustomMigration.Down != nil {
 			if err = cdbm.applyCustomMigration(cfg); err != nil {
 				return err
@@ -815,30 +879,91 @@ func (cdbm *CDBM) runMigrationConfigs(cfgs []migrationApplyConfig) error {
 
 	if cdbm.migrateCfg.MigrateType == cdbmutil.MigrateTypeUp {
 		for _, cfg := range cfgs {
-			if cfg.Version <= cdbm.migrateCfg.SchemaMigration.StartingVersion {
-				continue
-			}
+			// If schema config is dirty and loop is currently on starting version of migration,
+			// apply migration without any version check as our migration functions will first
+			// do a down migration to "undirty" current state of migration before applying up migration
+			//
+			// Else do version checks for current version and apply migration when neccessary
+			if cdbm.migrateCfg.SchemaMigration.SchemaCfg.Dirty && cfg.Version == cdbm.migrateCfg.SchemaMigration.StartingVersion {
+				if cfg.CustomMigration.Up != nil || cfg.CustomMigration.Down != nil {
+					if err = cdbm.applyCustomMigration(cfg); err != nil {
+						return err
+					}
+				} else {
+					// With file migrations, we have to apply the previous state version if dirty
+					// so the migrate library will do down
+					prevVersion := cfg.Version - 1
 
-			if cdbm.migrateCfg.TargetVersion < cfg.Version {
-				break
-			}
+					if err = cdbm.applyFileMigration(prevVersion); err != nil {
+						return err
+					}
+				}
+			} else {
+				// If current apply config version is less than or equal to starting version
+				// continue loop as we are migrating up and want the next version up
+				if cfg.Version <= cdbm.migrateCfg.SchemaMigration.StartingVersion {
+					continue
+				}
 
-			if err = applyMigration(cfg); err != nil {
-				return err
+				// If target version specified by user is less than current apply config version
+				// break from loop as this implies we are done migrating
+				if cdbm.migrateCfg.TargetVersion < cfg.Version {
+					break
+				}
+
+				if err = applyMigration(cfg); err != nil {
+					return err
+				}
 			}
 		}
 	} else {
 		for i := len(cfgs) - 1; i >= 0; i-- {
-			if cfgs[i].Version > cdbm.migrateCfg.SchemaMigration.StartingVersion {
-				continue
-			}
+			if cdbm.migrateCfg.TargetVersion == 0 && i == 0 {
+				if cfgs[i].CustomMigration.Up != nil || cfgs[i].CustomMigration.Down != nil {
+					if err = cdbm.applyCustomMigration(cfgs[i]); err != nil {
+						return err
+					}
+				} else if err = cdbm.applyFileMigration(0); err != nil {
+					return err
+				}
+			} else {
+				// If current apply config version is greater than or equal to starting version
+				// continue loop as we are migrating down and want the next version down
+				if cfgs[i].Version >= cdbm.migrateCfg.SchemaMigration.StartingVersion {
+					continue
+				}
 
-			if cdbm.migrateCfg.TargetVersion >= cfgs[i].Version {
-				break
-			}
+				// If target version specified by user is greater than current apply config version
+				// break from loop as this implies we are down migrating
+				if cdbm.migrateCfg.TargetVersion > cfgs[i].Version {
+					break
+				}
 
-			if err = applyMigration(cfgs[i]); err != nil {
-				return err
+				// If CustomMigration functions are defined then we are currently on custom migration
+				if cfgs[i].CustomMigration.Up != nil || cfgs[i].CustomMigration.Down != nil {
+
+					// If we are currently on custom migration config, we must first check if the
+					// config in next index is also a custom migration
+					//
+					// If it is, then we apply that down migration
+					// Else apply current file config
+					if cfgs[i+1].CustomMigration.Up != nil || cfgs[i+1].CustomMigration.Down != nil {
+						// When migrating down with custom migrations, we have to make copy of current config
+						// to lower version to what it will be after migration
+						copyCfg := cfgs[i+1]
+						copyCfg.Version--
+
+						if err = cdbm.applyCustomMigration(copyCfg); err != nil {
+							return err
+						}
+					} else if err = cdbm.applyFileMigration(cfgs[i].Version); err != nil {
+						return err
+					}
+				} else {
+					if err = cdbm.applyFileMigration(cfgs[i].Version); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}

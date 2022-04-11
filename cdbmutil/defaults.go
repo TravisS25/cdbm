@@ -88,11 +88,31 @@ func DefaultGetMigrationFunc(migDir string, db *sql.DB, protocolCfg DBProtocolCo
 // DefaultFileMigrationFunc is the default function to use with migrate library
 // to determine whether to migrate database up, down or force
 func DefaultFileMigrationFunc(mig *migrate.Migrate, version int, mt MigrationsType) error {
+	var err error
+
 	switch mt {
 	case MigrateTypeUp:
-		return mig.Steps(1)
+		err = mig.Migrate(uint(version))
+
+		if errors.Is(err, migrate.ErrNoChange) {
+			fmt.Printf("no change")
+			return nil
+		}
+
+		return err
 	case MigrateTypeDown:
-		return mig.Steps(-1)
+		if version == 0 {
+			err = mig.Down()
+		} else {
+			err = mig.Migrate(uint(version))
+		}
+
+		if errors.Is(err, migrate.ErrNoChange) {
+			fmt.Printf("no change")
+			return nil
+		}
+
+		return err
 	case MigrateTypeForce:
 		return mig.Force(version)
 	default:

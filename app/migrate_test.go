@@ -1006,9 +1006,9 @@ func TestApplyCustomMigration(t *testing.T) {
 
 	// Validating successful custom migration with inital dirty state
 	mApp = &CDBM{
-		DB: db,
+		DB:           db,
 		MigrateFlags: MigrateFlagsConfig{
-			MigrateDownIfDirty: true,
+			//MigrateDownIfDirty: true,
 		},
 		migrateCfg: migrateState{
 			MigrateType: cdbmutil.MigrateTypeUp,
@@ -1043,9 +1043,9 @@ func TestApplyCustomMigration(t *testing.T) {
 
 	// Validating error on migrating down on with inital dirty state
 	mApp = &CDBM{
-		DB: db,
+		DB:           db,
 		MigrateFlags: MigrateFlagsConfig{
-			MigrateDownIfDirty: true,
+			//MigrateDownIfDirty: true,
 		},
 		migrateCfg: migrateState{
 			MigrateType: cdbmutil.MigrateTypeUp,
@@ -1481,8 +1481,8 @@ func TestApplyFileMigration(t *testing.T) {
 	mApp = &CDBM{
 		DB:            db,
 		DBProtocolCfg: dbProtcol,
-		MigrateFlags: MigrateFlagsConfig{
-			MigrateDownIfDirty: true,
+		MigrateFlags:  MigrateFlagsConfig{
+			//MigrateDownIfDirty: true,
 		},
 		migrateCfg: migrateState{
 			MigrateType: cdbmutil.MigrateTypeUp,
@@ -1534,8 +1534,8 @@ func TestApplyFileMigration(t *testing.T) {
 	mApp = &CDBM{
 		DB:            db,
 		DBProtocolCfg: dbProtcol,
-		MigrateFlags: MigrateFlagsConfig{
-			MigrateDownIfDirty: true,
+		MigrateFlags:  MigrateFlagsConfig{
+			//MigrateDownIfDirty: true,
 		},
 		migrateCfg: migrateState{
 			MigrateType: cdbmutil.MigrateTypeUp,
@@ -1811,7 +1811,7 @@ func TestRunMigrationConfigs(t *testing.T) {
 		},
 	}
 
-	// Validating a normal custom down migration which is dirty
+	// Validating a normal custom down migration
 	if err = mApp.runMigrationConfigs(
 		[]migrationApplyConfig{
 			{
@@ -1863,6 +1863,50 @@ func TestRunMigrationConfigs(t *testing.T) {
 	if !customMigrationCalled {
 		t.Errorf("custom migration bool not called\n")
 	}
+
+	// --------------------------------------------------------------------------
+
+	deleteFromSchemaMigration(t, db)
+	customMigrationCalled = false
+
+	sm = schemaMigration{
+		StartingVersion:   3,
+		Dirty:             false,
+		DirtyState:        &emptyStr,
+		IsCustomMigration: true,
+	}
+
+	mApp = &CDBM{
+		DB: db,
+		migrateCfg: migrateState{
+			TargetVersion: 2,
+			LogWriter:     func(err error) {},
+			MigrateType:   cdbmutil.MigrateTypeDown,
+			InsertQuery:   insertQuery,
+			UpdateQuery:   updateQuery,
+			FileMigration: func(mig *migrate.Migrate, version int, mt cdbmutil.MigrationsType) error {
+				return nil
+			},
+			SchemaMigration: sm,
+		},
+	}
+
+	// Validating a normal file down migration
+	if err = mApp.runMigrationConfigs(
+		[]migrationApplyConfig{
+			{
+				Version: 1,
+			},
+			{
+				Version: 2,
+			},
+			{
+				Version: 3,
+			},
+		},
+	); err != nil {
+		t.Errorf("should not have error; got %s\n", err.Error())
+	}
 }
 
 func TestSuccessfulMigrate(t *testing.T) {
@@ -1901,7 +1945,7 @@ func TestSuccessfulMigrate(t *testing.T) {
 	defer os.RemoveAll(migrationsDir)
 
 	var sm schemaMigration
-	var file1Up, file1Down, file3Up, file3Down *os.File
+	var file1Up, file1Down, file4Up, file4Down *os.File
 	var id int64
 
 	if err = os.RemoveAll(migrationsDir); err != nil {
@@ -1928,27 +1972,36 @@ func TestSuccessfulMigrate(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	if file3Up, err = os.Create(migrationsDir + "000003_update.up.sql"); err != nil {
+	if _, err = os.Create(migrationsDir + "000003_update.up.sql"); err != nil {
 		t.Fatalf(err.Error())
 	}
 
-	if file3Down, err = os.Create(migrationsDir + "000003_update.down.sql"); err != nil {
+	if _, err = os.Create(migrationsDir + "000003_update.down.sql"); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if file4Up, err = os.Create(migrationsDir + "000004_update.up.sql"); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if file4Down, err = os.Create(migrationsDir + "000004_update.down.sql"); err != nil {
 		t.Fatalf(err.Error())
 	}
 
 	file1UpW := bufio.NewWriter(file1Up)
 
-	if _, err = file1UpW.WriteString(
+	file1Contents :=
 		`
-		create table if not exists foo(
-			id serial,
-			name text not null
-		);
+	create table if not exists foo(
+		id serial,
+		name text not null
+	);
 
-		insert into foo(name)
-		values('test1');
-		`,
-	); err != nil {
+	insert into foo(name)
+	values('test1');
+	`
+
+	if _, err = file1UpW.WriteString(file1Contents); err != nil {
 		t.Fatalf(err.Error())
 	}
 
@@ -1990,14 +2043,33 @@ func TestSuccessfulMigrate(t *testing.T) {
 				return innerErr
 			},
 		},
+		3: {
+			Up: func(db webutil.DBInterface) error {
+				_, innerErr := db.Exec(
+					`
+					insert into foo(name)
+					values('test3');
+					`,
+				)
+				return innerErr
+			},
+			Down: func(db webutil.DBInterface) error {
+				_, innerErr := db.Exec(
+					`
+					delete from foo where name = 'test3';
+					`,
+				)
+				return innerErr
+			},
+		},
 	}
 
-	file3UpW := bufio.NewWriter(file3Up)
+	file3UpW := bufio.NewWriter(file4Up)
 
 	if _, err = file3UpW.WriteString(
 		`
 		insert into foo(name)
-		values('test3');
+		values('test4');
 		`,
 	); err != nil {
 		t.Fatalf(err.Error())
@@ -2007,11 +2079,11 @@ func TestSuccessfulMigrate(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	file3DownW := bufio.NewWriter(file3Down)
+	file3DownW := bufio.NewWriter(file4Down)
 
 	if _, err = file3DownW.WriteString(
 		`
-		delete from foo where name = 'test3';
+		delete from foo where name = 'test4';
 		`,
 	); err != nil {
 		t.Fatalf(err.Error())
@@ -2021,15 +2093,18 @@ func TestSuccessfulMigrate(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	if mApp, err = NewTestCDBM(db, dbProtocolCfg.DBProtocol, MigrateFlagsConfig{
-		MigrationsProtocol: cdbmutil.FileProtocol,
-		MigrationsDir:      migrationsDir,
-		TargetVersion:      1,
-	}); err != nil {
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      1,
+		}); err != nil {
 		t.Fatalf(err.Error())
 	}
-
-	// --------------------------------------------------------------------------
 
 	if err = mApp.Migrate(
 		cdbmutil.DefaultGetMigrationFunc,
@@ -2057,11 +2132,14 @@ func TestSuccessfulMigrate(t *testing.T) {
 
 	// --------------------------------------------------------------------------
 
-	if mApp, err = NewTestCDBM(db, dbProtocolCfg.DBProtocol, MigrateFlagsConfig{
-		MigrationsProtocol: cdbmutil.FileProtocol,
-		MigrationsDir:      migrationsDir,
-		TargetVersion:      2,
-	}); err != nil {
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      2,
+		}); err != nil {
 		t.Fatalf(err.Error())
 	}
 
@@ -2090,298 +2168,17 @@ func TestSuccessfulMigrate(t *testing.T) {
 		t.Errorf(err.Error())
 	}
 
-	// // --------------------------------------------------------------------------
-
-	// mApp.MigrateFlags.TargetVersion = 3
-
-	// if err = mApp.Migrate(
-	// 	cdbmutil.DefaultGetMigrationFunc,
-	// 	cdbmutil.DefaultFileMigrationFunc,
-	// 	cmMap,
-	// ); err != nil {
-	// 	t.Errorf("should not have error; got %+v\n", err)
-	// }
-
-	// sm = getSchemaMigration(t, db)
-
-	// if sm.StartingVersion != 3 {
-	// 	t.Errorf("version should be 3; got %d\n", sm.StartingVersion)
-	// }
-	// if sm.Dirty {
-	// 	t.Errorf("should not be dirty")
-	// }
-	// if sm.IsCustomMigration {
-	// 	t.Errorf("should not be custom")
-	// }
-
-	// if err = db.QueryRowx("select id from foo where name = 'test3'").
-	// 	Scan(&id); err != nil {
-	// 	t.Errorf(err.Error())
-	// }
-
-	// // --------------------------------------------------------------------------
-
-	// mApp.MigrateFlags.TargetVersion = 2
-
-	// if err = mApp.Migrate(
-	// 	cdbmutil.DefaultGetMigrationFunc,
-	// 	cdbmutil.DefaultFileMigrationFunc,
-	// 	cmMap,
-	// ); err != nil {
-	// 	t.Errorf("should not have error; got %+v\n", err)
-	// }
-
-	// sm = getSchemaMigration(t, db)
-
-	// if sm.StartingVersion != 2 {
-	// 	t.Errorf("version should be 2; got %d\n", sm.StartingVersion)
-	// }
-	// if sm.Dirty {
-	// 	t.Errorf("should not be dirty")
-	// }
-	// if !sm.IsCustomMigration {
-	// 	t.Errorf("should be custom")
-	// }
-
-	// if err = db.QueryRowx("select id from foo where name = 'test3'").
-	// 	Scan(&id); err == nil {
-	// 	t.Errorf("should have error")
-	// } else {
-	// 	if !errors.Is(err, sql.ErrNoRows) {
-	// 		t.Errorf(err.Error())
-	// 	}
-	// }
-
-	// if err = db.QueryRowx("select id from foo where name = 'test2'").
-	// 	Scan(&id); err != nil {
-	// 	t.Errorf(err.Error())
-	// }
-
-	// // --------------------------------------------------------------------------
-
-	// mApp.MigrateFlags.TargetVersion = 1
-
-	// if err = mApp.Migrate(
-	// 	cdbmutil.DefaultGetMigrationFunc,
-	// 	cdbmutil.DefaultFileMigrationFunc,
-	// 	cmMap,
-	// ); err != nil {
-	// 	t.Errorf("should not have error; got %+v\n", err)
-	// }
-
-	// sm = getSchemaMigration(t, db)
-
-	// if sm.StartingVersion != 1 {
-	// 	t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
-	// }
-	// if sm.Dirty {
-	// 	t.Errorf("should not be dirty")
-	// }
-	// if sm.IsCustomMigration {
-	// 	t.Errorf("should not be custom")
-	// }
-
-	// if err = db.QueryRowx("select id from foo where name = 'test2'").
-	// 	Scan(&id); err == nil {
-	// 	t.Errorf("should have error")
-	// } else {
-	// 	if !errors.Is(err, sql.ErrNoRows) {
-	// 		t.Errorf(err.Error())
-	// 	}
-	// }
-
-	// if err = db.QueryRowx("select id from foo where name = 'test1'").
-	// 	Scan(&id); err != nil {
-	// 	t.Errorf("should not have error; got %v\n", err)
-	// }
-
-	// // --------------------------------------------------------------------------
-
-	// mApp.MigrateFlags.TargetVersion = 0
-
-	// if err = mApp.Migrate(
-	// 	cdbmutil.DefaultGetMigrationFunc,
-	// 	cdbmutil.DefaultFileMigrationFunc,
-	// 	cmMap,
-	// ); err != nil {
-	// 	t.Errorf("should not have error; got %+v\n", err)
-	// }
-
-	// if err = db.QueryRowx("select version from schema_migrations").Scan(&id); err == nil {
-	// 	t.Errorf("should have error")
-	// } else if !errors.Is(err, sql.ErrNoRows) {
-	// 	t.Errorf(err.Error())
-	// }
-}
-
-func TestDirtyUpMigrate(t *testing.T) {
-	var err error
-	var mApp *CDBM
-
-	settings, err := cdbmutil.GetCDBMUtilSettings("")
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	dbProtocolCfg := cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(settings.BaseDatabaseSettings.DatabaseProtocol)]
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	settings.DBSetup.FileServerSetup = nil
-	settings.DBSetup.BaseSchemaFile = ""
-
-	db, dbName, err := cdbmutil.GetNewDatabase(
-		settings,
-		cdbmutil.DefaultExecCmd,
-		cdbmutil.DefaultGetDB,
-	)
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
-	defer dropCmd.Start()
-
-	migrationsDir := "/tmp/migrate-dirty-up/"
-	defer os.RemoveAll(migrationsDir)
-
-	var sm schemaMigration
-	var file1Up, file1Down, file3Up, file3Down *os.File
-	var id int64
-
-	if err = os.RemoveAll(migrationsDir); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = os.MkdirAll(migrationsDir, os.ModePerm); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file1Up, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file1Down, err = os.Create(migrationsDir + "000001_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if _, err = os.Create(migrationsDir + "000002_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if _, err = os.Create(migrationsDir + "000002_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file3Up, err = os.Create(migrationsDir + "000003_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file3Down, err = os.Create(migrationsDir + "000003_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file1UpW := bufio.NewWriter(file1Up)
-
-	if _, err = file1UpW.WriteString(
-		`
-		create table if not exists foo(
-			id serial,
-			name text not null
-		);
-
-		insert into foo(name)
-		values('test1');
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file1UpW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file1DownW := bufio.NewWriter(file1Down)
-
-	if _, err = file1DownW.WriteString(
-		`
-		drop table if exists foo;
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file1DownW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	cmMap := map[int]cdbmutil.CustomMigration{
-		2: {
-			Up: func(db webutil.DBInterface) error {
-				_, innerErr := db.Exec(
-					`
-					insert into foo(id, name)
-					values(2, 'test2') on conflict do nothing;
-					`,
-				)
-				return innerErr
-			},
-			Down: func(db webutil.DBInterface) error {
-				_, innerErr := db.Exec(
-					`
-					delete from foo where name = 'test2';
-					`,
-				)
-				return innerErr
-			},
-		},
-	}
-
-	file3UpW := bufio.NewWriter(file3Up)
-
-	if _, err = file3UpW.WriteString(
-		`
-		insert into foo(id, name)
-		values(3, 'test3') on conflict do nothing;
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file3UpW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file3DownW := bufio.NewWriter(file3Down)
-
-	if _, err = file3DownW.WriteString(
-		`
-		delete from foo where name = 'test3';
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file3DownW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	updateQuery := getSchemaUpdate(t, string(dbProtocolCfg.DBProtocol))
-
 	// --------------------------------------------------------------------------
 
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		MigrateFlags: MigrateFlagsConfig{
-			TargetVersion:      1,
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
 			MigrationsProtocol: cdbmutil.FileProtocol,
 			MigrationsDir:      migrationsDir,
-		},
+			TargetVersion:      3,
+		}); err != nil {
+		t.Fatalf(err.Error())
 	}
 
 	if err = mApp.Migrate(
@@ -2394,8 +2191,46 @@ func TestDirtyUpMigrate(t *testing.T) {
 
 	sm = getSchemaMigration(t, db)
 
-	if sm.StartingVersion != 1 {
-		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
+	if sm.StartingVersion != 3 {
+		t.Errorf("version should be 3; got %d\n", sm.StartingVersion)
+	}
+	if sm.Dirty {
+		t.Errorf("should not be dirty")
+	}
+	if !sm.IsCustomMigration {
+		t.Errorf("should be custom")
+	}
+
+	if err = db.QueryRowx("select id from foo where name = 'test3'").
+		Scan(&id); err != nil {
+		t.Errorf(err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      4,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Errorf("should not have error; got %+v\n", err)
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 4 {
+		t.Errorf("version should be 4; got %d\n", sm.StartingVersion)
 	}
 	if sm.Dirty {
 		t.Errorf("should not be dirty")
@@ -2404,56 +2239,27 @@ func TestDirtyUpMigrate(t *testing.T) {
 		t.Errorf("should not be custom")
 	}
 
-	if err = db.QueryRowx("select id from foo where name = 'test1'").
+	if err = db.QueryRowx("select id from foo where name = 'test4'").
 		Scan(&id); err != nil {
 		t.Errorf(err.Error())
 	}
 
 	// --------------------------------------------------------------------------
 
-	if sm, err = mApp.getSchemaMigration(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	fmt.Printf("starting version: %d\n", sm.StartingVersion)
-
-	if _, err = db.Exec(
-		updateQuery,
-		sm.StartingVersion,
-		true,
-		sm.DirtyState,
-		sm.IsCustomMigration,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	downCalled := false
-
-	migFunc := func(mig *migrate.Migrate, version int, mt cdbmutil.MigrationsType) error {
-		if version == 1 {
-			if mt == cdbmutil.MigrateTypeDown {
-				downCalled = true
-			} else if !downCalled {
-				t.Errorf("Down migration should have been called")
-			}
-		}
-		return cdbmutil.DefaultFileMigrationFunc(mig, version, mt)
-	}
-
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		MigrateFlags: MigrateFlagsConfig{
-			TargetVersion:      3,
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
 			MigrationsProtocol: cdbmutil.FileProtocol,
 			MigrationsDir:      migrationsDir,
-			ResetDirtyFlag:     true,
-		},
+			TargetVersion:      3,
+		}); err != nil {
+		t.Fatalf(err.Error())
 	}
 
 	if err = mApp.Migrate(
 		cdbmutil.DefaultGetMigrationFunc,
-		migFunc,
+		cdbmutil.DefaultFileMigrationFunc,
 		cmMap,
 	); err != nil {
 		t.Errorf("should not have error; got %+v\n", err)
@@ -2475,9 +2281,361 @@ func TestDirtyUpMigrate(t *testing.T) {
 		Scan(&id); err != nil {
 		t.Errorf(err.Error())
 	}
+
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      2,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Errorf("should not have error; got %+v\n", err)
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 2 {
+		t.Errorf("version should be 2; got %d\n", sm.StartingVersion)
+	}
+	if sm.Dirty {
+		t.Errorf("should not be dirty")
+	}
+	if !sm.IsCustomMigration {
+		t.Errorf("should be custom")
+	}
+
+	if err = db.QueryRowx("select id from foo where name = 'test2'").
+		Scan(&id); err != nil {
+		t.Errorf(err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      1,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Fatalf("should not have error; got %+v\n", err)
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 1 {
+		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
+	}
+	if sm.Dirty {
+		t.Errorf("should not be dirty")
+	}
+	if sm.IsCustomMigration {
+		t.Errorf("should not be custom")
+	}
+
+	if err = db.QueryRowx("select id from foo where name = 'test1'").Scan(&id); err != nil {
+		t.Errorf(err.Error())
+	}
+
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      0,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Fatalf("should not have error; got %+v\n", err)
+	}
+
+	var version int
+
+	err = db.QueryRowx("select version from schema_migrations").Scan(&version)
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("should not have any records in schema_migrations at this point\n")
+	}
+
+	// --------------------------------------------------------------------------
+
+	////////////////////////////////////////////////////////////
+	// Here we begin testing for dirty state and making sure
+	// our migrations will properly migrate down first before
+	// migrating up
+	////////////////////////////////////////////////////////////
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      3,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	invalidCmMap := map[int]cdbmutil.CustomMigration{
+		2: {
+			Up: func(db webutil.DBInterface) error {
+				_, innerErr := db.Exec(
+					`
+					insert into foo(name)
+					values('test2');
+					`,
+				)
+				return innerErr
+			},
+			Down: func(db webutil.DBInterface) error {
+				_, innerErr := db.Exec(
+					`
+					delete from foo where name = 'test2';
+					`,
+				)
+				return innerErr
+			},
+		},
+		3: {
+			Up: func(db webutil.DBInterface) error {
+				return fmt.Errorf("some error")
+			},
+			Down: func(db webutil.DBInterface) error {
+				_, innerErr := db.Exec(
+					`
+					delete from foo where name = 'test3';
+					`,
+				)
+				return innerErr
+			},
+		},
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		invalidCmMap,
+	); err == nil {
+		t.Fatalf("should have error")
+	} else if !strings.Contains(err.Error(), "failed on custom up migration for version: '3'") {
+		t.Fatalf("should have failed on custom up migration; got %s", err.Error())
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 3 {
+		t.Errorf("version should be 3; got %d\n", sm.StartingVersion)
+	}
+	if !sm.Dirty {
+		t.Errorf("should be dirty")
+	}
+	if !sm.IsCustomMigration {
+		t.Errorf("should be custom")
+	}
+	if sm.DirtyState != nil {
+		if *sm.DirtyState != string(cdbmutil.MigrateTypeUp) {
+			t.Errorf("should have dirty state 'up'; got %s\n", *sm.DirtyState)
+		}
+	} else {
+		t.Errorf("should have dirty state 'up'")
+	}
+
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      4,
+			ResetDirtyFlag:     true,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Here we are testing our migration dirty state table
+	// that we first do a down custom migration before applying up migrations
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Fatalf("should not have error; got %+v\n", err)
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 4 {
+		t.Errorf("version should be 4; got %d\n", sm.StartingVersion)
+	}
+	if sm.Dirty {
+		t.Errorf("should not be dirty")
+	}
+	if sm.IsCustomMigration {
+		t.Errorf("should not be custom")
+	}
+
+	// --------------------------------------------------------------------------
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      0,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Fatalf("should not have error; got %+v\n", err)
+	}
+
+	err = db.QueryRowx("select version from schema_migrations").Scan(&version)
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("should not have any records in schema_migrations at this point\n")
+	}
+
+	// --------------------------------------------------------------------------
+
+	if _, err = file1UpW.WriteString("invalid migration"); err != nil {
+		t.Fatalf("%+v", err.Error())
+	}
+
+	if err = file1UpW.Flush(); err != nil {
+		t.Fatalf("%+v", err.Error())
+	}
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      1,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err == nil {
+		t.Fatalf("should have error")
+	} else if !strings.Contains(err.Error(), "failed on file up migration") {
+		t.Errorf("should have file up migration error; got %s\n", err.Error())
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 1 {
+		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
+	}
+	if !sm.Dirty {
+		t.Errorf("should be dirty")
+	}
+	if sm.IsCustomMigration {
+		t.Errorf("should not be custom")
+	}
+	if sm.DirtyState != nil {
+		if *sm.DirtyState != string(cdbmutil.MigrateTypeUp) {
+			t.Errorf("should have dirty state 'up'; got %s\n", *sm.DirtyState)
+		}
+	} else {
+		t.Errorf("should have dirty state 'up'")
+	}
+
+	// --------------------------------------------------------------------------
+
+	if err = os.RemoveAll(migrationsDir + "000001_update.up.sql"); err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	if file1Up, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	file1UpW.Reset(file1Up)
+
+	if _, err = file1UpW.WriteString(file1Contents); err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	if err = file1UpW.Flush(); err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
+			TargetVersion:      -1,
+			ResetDirtyFlag:     true,
+		}); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if err = mApp.Migrate(
+		cdbmutil.DefaultGetMigrationFunc,
+		cdbmutil.DefaultFileMigrationFunc,
+		cmMap,
+	); err != nil {
+		t.Fatalf("should not have error; got %+v\n", err)
+	}
+
+	sm = getSchemaMigration(t, db)
+
+	if sm.StartingVersion != 4 {
+		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
+	}
+	if sm.Dirty {
+		t.Errorf("should not be dirty")
+	}
+	if sm.IsCustomMigration {
+		t.Errorf("should not be custom")
+	}
 }
 
-func TestDirtyDownMigrate(t *testing.T) {
+func TestFoobar(t *testing.T) {
 	var err error
 	var mApp *CDBM
 
@@ -2509,12 +2667,11 @@ func TestDirtyDownMigrate(t *testing.T) {
 	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
 	defer dropCmd.Start()
 
-	migrationsDir := "/tmp/migrate-dirty-down/"
+	migrationsDir := "/tmp/migrate-integration/"
 	defer os.RemoveAll(migrationsDir)
 
 	var sm schemaMigration
-	var file1Up, file1Down, file3Up, file3Down *os.File
-	var id int64
+	var file1Up, file1Down, file4Up, file4Down *os.File
 
 	if err = os.RemoveAll(migrationsDir); err != nil {
 		t.Fatalf(err.Error())
@@ -2540,11 +2697,19 @@ func TestDirtyDownMigrate(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	if file3Up, err = os.Create(migrationsDir + "000003_update.up.sql"); err != nil {
+	if _, err = os.Create(migrationsDir + "000003_update.up.sql"); err != nil {
 		t.Fatalf(err.Error())
 	}
 
-	if file3Down, err = os.Create(migrationsDir + "000003_update.down.sql"); err != nil {
+	if _, err = os.Create(migrationsDir + "000003_update.down.sql"); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if file4Up, err = os.Create(migrationsDir + "000004_update.up.sql"); err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if file4Down, err = os.Create(migrationsDir + "000004_update.down.sql"); err != nil {
 		t.Fatalf(err.Error())
 	}
 
@@ -2552,13 +2717,7 @@ func TestDirtyDownMigrate(t *testing.T) {
 
 	if _, err = file1UpW.WriteString(
 		`
-		create table if not exists foo(
-			id serial,
-			name text not null
-		);
-
-		insert into foo(name)
-		values('test1');
+		invalid migration
 		`,
 	); err != nil {
 		t.Fatalf(err.Error())
@@ -2602,271 +2761,33 @@ func TestDirtyDownMigrate(t *testing.T) {
 				return innerErr
 			},
 		},
-	}
-
-	file3UpW := bufio.NewWriter(file3Up)
-
-	if _, err = file3UpW.WriteString(
-		`
-		insert into foo(name)
-		values('test3');
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file3UpW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file3DownW := bufio.NewWriter(file3Down)
-
-	if _, err = file3DownW.WriteString(
-		`
-		delete from foo where name = 'test3';
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file3DownW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	var rows *sqlx.Rows
-
-	updateQuery := getSchemaUpdate(t, string(dbProtocolCfg.DBProtocol))
-
-	// --------------------------------------------------------------------------
-
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		MigrateFlags: MigrateFlagsConfig{
-			TargetVersion:      3,
-			MigrationsProtocol: cdbmutil.FileProtocol,
-			MigrationsDir:      migrationsDir,
-		},
-	}
-
-	if err = mApp.Migrate(
-		cdbmutil.DefaultGetMigrationFunc,
-		cdbmutil.DefaultFileMigrationFunc,
-		cmMap,
-	); err != nil {
-		t.Errorf("should not have error; got %+v\n", err)
-	}
-
-	sm = getSchemaMigration(t, db)
-
-	if sm.StartingVersion != 3 {
-		t.Errorf("version should be 3; got %d\n", sm.StartingVersion)
-	}
-	if sm.Dirty {
-		t.Errorf("should not be dirty")
-	}
-	if sm.IsCustomMigration {
-		t.Errorf("should not be custom")
-	}
-
-	var name string
-
-	if rows, err = db.Queryx("select name from foo;"); err != nil {
-		t.Errorf(err.Error())
-	}
-
-	for rows.Next() {
-		rows.Scan(&name)
-		fmt.Printf("%s\n", name)
-	}
-
-	if err = db.QueryRowx("select id from foo where name = 'test3'").
-		Scan(&id); err != nil {
-		t.Errorf(err.Error())
-	}
-
-	// --------------------------------------------------------------------------
-
-	if sm, err = mApp.getSchemaMigration(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if _, err = db.Exec(
-		updateQuery,
-		sm.StartingVersion,
-		true,
-		sm.DirtyState,
-		sm.IsCustomMigration,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		MigrateFlags: MigrateFlagsConfig{
-			TargetVersion:      1,
-			MigrationsProtocol: cdbmutil.FileProtocol,
-			MigrationsDir:      migrationsDir,
-			ResetDirtyFlag:     true,
-		},
-	}
-
-	if err = mApp.Migrate(
-		cdbmutil.DefaultGetMigrationFunc,
-		cdbmutil.DefaultFileMigrationFunc,
-		cmMap,
-	); err != nil {
-		t.Errorf("should not have error; got %+v\n", err)
-	}
-
-	sm = getSchemaMigration(t, db)
-
-	if sm.StartingVersion != 1 {
-		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
-	}
-	if sm.Dirty {
-		t.Errorf("should not be dirty")
-	}
-	if sm.IsCustomMigration {
-		t.Errorf("should not be custom")
-	}
-
-	if rows, err = db.Queryx("select id from foo"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	counter := 0
-
-	for rows.Next() {
-		counter++
-	}
-
-	if counter != 1 {
-		t.Errorf("counter should only be 1; got %d\n", counter)
-	}
-}
-
-func TestRollbackMigrate(t *testing.T) {
-	var err error
-	var mApp *CDBM
-
-	settings, err := cdbmutil.GetCDBMUtilSettings("")
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	dbProtocolCfg := cdbmutil.DefaultProtocolMap[cdbmutil.DBProtocol(settings.BaseDatabaseSettings.DatabaseProtocol)]
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	settings.DBSetup.FileServerSetup = nil
-	settings.DBSetup.BaseSchemaFile = ""
-
-	db, dbName, err := cdbmutil.GetNewDatabase(
-		settings,
-		cdbmutil.DefaultExecCmd,
-		cdbmutil.DefaultGetDB,
-	)
-
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	dropCmd := exec.Command("/bin/sh", "-c", fmt.Sprintf(settings.DBAction.DropDB, dbName))
-	defer dropCmd.Start()
-
-	migrationsDir := "/tmp/migrate-rollback/"
-	defer os.RemoveAll(migrationsDir)
-
-	var file1Up, file1Down, file3Up, file3Down *os.File
-
-	if err = os.RemoveAll(migrationsDir); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = os.MkdirAll(migrationsDir, os.ModePerm); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file1Up, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file1Down, err = os.Create(migrationsDir + "000001_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if _, err = os.Create(migrationsDir + "000002_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if _, err = os.Create(migrationsDir + "000002_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file3Up, err = os.Create(migrationsDir + "000003_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file3Down, err = os.Create(migrationsDir + "000003_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file1UpW := bufio.NewWriter(file1Up)
-
-	if _, err = file1UpW.WriteString(
-		`
-		create table if not exists foo(
-			id serial,
-			name text not null
-		);
-
-		insert into foo(name)
-		values('test1');
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file1UpW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file1DownW := bufio.NewWriter(file1Down)
-
-	if _, err = file1DownW.WriteString(
-		`
-		drop table if exists foo;
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file1DownW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	cmMap := map[int]cdbmutil.CustomMigration{
-		2: {
+		3: {
 			Up: func(db webutil.DBInterface) error {
-				return fmt.Errorf("migration error")
+				_, innerErr := db.Exec(
+					`
+					insert into foo(name)
+					values('test3');
+					`,
+				)
+				return innerErr
 			},
 			Down: func(db webutil.DBInterface) error {
-				return nil
+				_, innerErr := db.Exec(
+					`
+					delete from foo where name = 'test3';
+					`,
+				)
+				return innerErr
 			},
 		},
 	}
 
-	file3UpW := bufio.NewWriter(file3Up)
+	file3UpW := bufio.NewWriter(file4Up)
 
 	if _, err = file3UpW.WriteString(
 		`
 		insert into foo(name)
-		values('test3');
+		values('test4');
 		`,
 	); err != nil {
 		t.Fatalf(err.Error())
@@ -2876,11 +2797,11 @@ func TestRollbackMigrate(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	file3DownW := bufio.NewWriter(file3Down)
+	file3DownW := bufio.NewWriter(file4Down)
 
 	if _, err = file3DownW.WriteString(
 		`
-		delete from foo where name = 'test3';
+		delete from foo where name = 'test4';
 		`,
 	); err != nil {
 		t.Fatalf(err.Error())
@@ -2890,43 +2811,17 @@ func TestRollbackMigrate(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	// -----------------------------------------------------------------
+	// --------------------------------------------------------------------------
 
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		migrateCfg: migrateState{
-			LogWriter: func(error) {},
-		},
-		MigrateFlags: MigrateFlagsConfig{
+	if mApp, err = NewTestCDBM(
+		db,
+		dbProtocolCfg.DBProtocol,
+		MigrateFlagsConfig{
+			MigrationsProtocol: cdbmutil.FileProtocol,
+			MigrationsDir:      migrationsDir,
 			TargetVersion:      1,
-			MigrationsProtocol: cdbmutil.FileProtocol,
-			MigrationsDir:      migrationsDir,
-		},
-	}
-
-	if err = mApp.Migrate(
-		cdbmutil.DefaultGetMigrationFunc,
-		cdbmutil.DefaultFileMigrationFunc,
-		cmMap,
-	); err != nil {
-		t.Errorf("should not have error; got %+v\n", err)
-	}
-
-	// -----------------------------------------------------------------
-
-	mApp = &CDBM{
-		DB:            db,
-		DBProtocolCfg: dbProtocolCfg,
-		migrateCfg: migrateState{
-			LogWriter: func(error) {},
-		},
-		MigrateFlags: MigrateFlagsConfig{
-			TargetVersion:      2,
-			MigrationsProtocol: cdbmutil.FileProtocol,
-			MigrationsDir:      migrationsDir,
-			RollbackOnFailure:  true,
-		},
+		}); err != nil {
+		t.Fatalf(err.Error())
 	}
 
 	if err = mApp.Migrate(
@@ -2934,101 +2829,27 @@ func TestRollbackMigrate(t *testing.T) {
 		cdbmutil.DefaultFileMigrationFunc,
 		cmMap,
 	); err == nil {
-		t.Errorf("should have error")
-	} else if err.Error() != "failed on custom up migration for version: '2' but successfully rolled back to version: '1'" {
-		t.Errorf(err.Error())
+		t.Fatalf("should have error")
+	} else if !strings.Contains(err.Error(), "failed on file up migration") {
+		t.Errorf("should have file up migration error; got %s\n", err.Error())
 	}
 
-	sm := getSchemaMigration(t, db)
+	sm = getSchemaMigration(t, db)
 
 	if sm.StartingVersion != 1 {
-		t.Errorf("should have rolled back to version 1; got %d\n", sm.StartingVersion)
+		t.Errorf("version should be 1; got %d\n", sm.StartingVersion)
 	}
-}
-
-func TestMigrateItself(t *testing.T) {
-	returnCfg, err := cdbmutil.GetMigrationSetupTeardown(
-		"",
-		cdbmutil.DefaultExecCmd,
-		cdbmutil.DefaultGetDB,
-		[]string{},
-	)
-
-	defer returnCfg.TearDown()
-
-	mApp, err := NewCDBM(RootFlagsConfig{
-		User:       returnCfg.Settings.BaseDatabaseSettings.Settings.User,
-		Host:       returnCfg.Settings.BaseDatabaseSettings.Settings.Host,
-		Port:       returnCfg.Settings.BaseDatabaseSettings.Settings.Port,
-		Database:   returnCfg.Settings.BaseDatabaseSettings.Settings.DBName,
-		DBProtocol: returnCfg.Settings.BaseDatabaseSettings.DatabaseProtocol,
-		SSLMode:    returnCfg.Settings.BaseDatabaseSettings.Settings.SSLMode,
-	}, nil)
-
-	if err != nil {
-		t.Fatalf("%+v", err)
+	if !sm.Dirty {
+		t.Errorf("should be dirty")
 	}
-
-	migrationsDir := "/tmp/migrate-integration/"
-	defer os.RemoveAll(migrationsDir)
-
-	var file1Up, file1Down *os.File
-
-	if err = os.RemoveAll(migrationsDir); err != nil {
-		t.Fatalf(err.Error())
+	if sm.IsCustomMigration {
+		t.Errorf("should not be custom")
 	}
-
-	if err = os.MkdirAll(migrationsDir, os.ModePerm); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file1Up, err = os.Create(migrationsDir + "000001_update.up.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if file1Down, err = os.Create(migrationsDir + "000001_update.down.sql"); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file1UpW := bufio.NewWriter(file1Up)
-
-	if _, err = file1UpW.WriteString(
-		`
-		create table if not exists foo(
-			id serial,
-			name text not null
-		);
-
-		insert into foo(name)
-		values('test1');
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file1UpW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	file1DownW := bufio.NewWriter(file1Down)
-
-	if _, err = file1DownW.WriteString(
-		`
-		drop table if exists foo;
-		`,
-	); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	if err = file1DownW.Flush(); err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	// -----------------------------------------------------------------
-
-	mApp.MigrateFlags.MigrationsDir = migrationsDir
-
-	if err = mApp.Migrate(cdbmutil.DefaultGetMigrationFunc, cdbmutil.DefaultFileMigrationFunc, nil); err != nil {
-		t.Errorf("%+v", err)
+	if sm.DirtyState != nil {
+		if *sm.DirtyState != string(cdbmutil.MigrateTypeUp) {
+			t.Errorf("should have dirty state 'up'; got %s\n", *sm.DirtyState)
+		}
+	} else {
+		t.Errorf("should have dirty state 'up'")
 	}
 }
