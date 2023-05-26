@@ -2,9 +2,9 @@ module github.com/TravisS25/cdbm
 
 go 1.15
 
-replace github.com/TravisS25/webutil => /home/travis/programming/go/src/github.com/TravisS25/webutil
+replace github.com/TravisS25/webutil => /home/travis/go/src/github.com/TravisS25/webutil
 
-replace github.com/jmoiron/sqlx => /home/travis/programming/go/src/github.com/jmoiron/sqlx
+replace github.com/jmoiron/sqlx => /home/travis/go/src/github.com/jmoiron/sqlx
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.0
